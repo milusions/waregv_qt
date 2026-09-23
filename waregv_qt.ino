@@ -1,107 +1,85 @@
-/*
- * Arduino Nano / Uno - SSD1306 OLED Controller for ROS 2 Serial Interface
- * Wire.h Driver Only (No Adafruit or external SSD1306 libraries required)
- *
- * Expected Serial Input @ 115200 Baud:
- *   {"profile":"goal_received"}
- *   {"profile":"navigated"}
- *   {"profile":"goal_reached"}
- *   {"profile":"navigation_error"}
- *   {"profile":"is_speaking"}
- *   {"profile":"is_not_speaking"}
- */
-
 #include <Wire.h>
-#include "SSD1306_Wire.h"
-#include "Profiles.h"
 
-SSD1306Wire oled;
-ProfileManager profiles(oled);
+#define OLED_ADDR 0x3C
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
 
-char serialBuffer[64];
-uint8_t bufferIdx = 0;
+// 128x64 frame buffer (1024 bytes)
+uint8_t frameBuffer[OLED_WIDTH * OLED_HEIGHT / 8];
 
-void setup() {
-    Serial.begin(115200);
-    while (!Serial) { ; }
-
-    Serial.println(F("--- ROS 2 OLED Profile Controller Online ---"));
-    Serial.println(F("Send JSON command, e.g.: {\"profile\":\"goal_received\"}"));
-
-    // Initialize SSD1306 OLED (I2C address 0x3C)
-    oled.begin();
-
-    // Set default standby state
-    profiles.setProfile(PROFILE_IS_NOT_SPEAKING);
+// Send single command byte to SSD1306
+void sendCommand(uint8_t cmd) {
+  Wire.beginTransmission(OLED_ADDR);
+  Wire.write(0x00); // Command stream header
+  Wire.write(cmd);
+  Wire.endTransmission();
 }
 
-void loop() {
-    // 1. Process Serial JSON commands from ROS 2 Node
-    checkSerialInput();
+// Corrected SSD1306 OLED Initialization
+void initOLED() {
+  Wire.begin();
+  Wire.setClock(400000L); // Fast 400kHz I2C clock
+  delay(50);
+  
+  sendCommand(0xAE); // Display OFF
+  sendCommand(0xD5); sendCommand(0x80); // Set display clock divide ratio
+  sendCommand(0xA8); sendCommand(0x3F); // Set multiplex ratio (64MUX)
+  sendCommand(0xD3); sendCommand(0x00); // Set display offset (no offset)
+  sendCommand(0x40);                     // Set start line #0
+  sendCommand(0x8D); sendCommand(0x14); // Enable charge pump
+  
+  // FIX 1: Set Memory Addressing Mode to Horizontal Addressing (0x20, 0x00)
+  sendCommand(0x20); sendCommand(0x00); 
+  
+  sendCommand(0xA1); // Column remap (SEG0 to 127)
+  sendCommand(0xC8); // COM scan direction remapped
+  sendCommand(0xDA); sendCommand(0x12); // Set COM pins hardware config
+  sendCommand(0x81); sendCommand(0xCF); // Set contrast control
+  sendCommand(0xD9); sendCommand(0xF1); // Set pre-charge period
+  sendCommand(0xDB); sendCommand(0x40); // Set VCOMH deselect level
+  sendCommand(0xA4);                     // Entire display ON (resume to RAM)
+  sendCommand(0xA6);                     // Normal display mode
+  sendCommand(0xAF); // Display ON
 
-    // 2. Render and animate active profile screen
-    profiles.update();
+  clearBuffer();
+  renderBuffer();
 }
 
-void checkSerialInput() {
-    while (Serial.available() > 0) {
-        char c = Serial.read();
+// Clear local RAM buffer
+void clearBuffer() {
+  memset(frameBuffer, 0, sizeof(frameBuffer));
+}
 
-        if (c == '\n' || c == '\r') {
-            if (bufferIdx > 0) {
-                serialBuffer[bufferIdx] = '\0';
-                parseJsonCommand(serialBuffer);
-                bufferIdx = 0;
-            }
-        } else if (bufferIdx < sizeof(serialBuffer) - 1) {
-            serialBuffer[bufferIdx++] = c;
-        }
+// Corrected Buffer Renderer using 0x21 (Column) & 0x22 (Page) addressing
+void renderBuffer() {
+  // Set Column Address Range: 0 to 127
+  sendCommand(0x21);
+  sendCommand(0);
+  sendCommand(127);
+
+  // Set Page Address Range: 0 to 7
+  sendCommand(0x22);
+  sendCommand(0);
+  sendCommand(7);
+
+  // Stream full 1024-byte framebuffer in 16-byte Wire transmissions
+  for (uint16_t i = 0; i < sizeof(frameBuffer); i += 16) {
+    Wire.beginTransmission(OLED_ADDR);
+    Wire.write(0x40); // Data stream header
+    for (uint8_t j = 0; j < 16; j++) {
+      Wire.write(frameBuffer[i + j]);
     }
+    Wire.endTransmission();
+  }
 }
 
-void parseJsonCommand(const char* jsonStr) {
-    Serial.print(F("ROS 2 Received: "));
-    Serial.println(jsonStr);
-
-    const char* keyPos = strstr(jsonStr, "\"profile\"");
-    if (!keyPos) keyPos = strstr(jsonStr, "profile");
-
-    if (keyPos) {
-        const char* colonPos = strchr(keyPos, ':');
-        if (colonPos) {
-            // ROS 2 Navigation & Audio Profiles
-            if (strstr(colonPos, "goal_received")) {
-                profiles.setProfile(PROFILE_GOAL_RECEIVED);
-                Serial.println(F("-> Profile: GOAL_RECEIVED"));
-            } else if (strstr(colonPos, "navigated")) {
-                profiles.setProfile(PROFILE_NAVIGATED);
-                Serial.println(F("-> Profile: NAVIGATED"));
-            } else if (strstr(colonPos, "goal_reached")) {
-                profiles.setProfile(PROFILE_GOAL_REACHED);
-                Serial.println(F("-> Profile: GOAL_REACHED"));
-            } else if (strstr(colonPos, "navigation_error")) {
-                profiles.setProfile(PROFILE_NAVIGATION_ERROR);
-                Serial.println(F("-> Profile: NAVIGATION_ERROR"));
-            } else if (strstr(colonPos, "is_speaking")) {
-                profiles.setProfile(PROFILE_IS_SPEAKING);
-                Serial.println(F("-> Profile: IS_SPEAKING"));
-            } else if (strstr(colonPos, "is_not_speaking")) {
-                profiles.setProfile(PROFILE_IS_NOT_SPEAKING);
-                Serial.println(F("-> Profile: IS_NOT_SPEAKING"));
-            } 
-            // Preset Profiles
-            else if (strstr(colonPos, "booting")) {
-                profiles.setProfile(PROFILE_BOOTING);
-                Serial.println(F("-> Profile: BOOTING"));
-            } else if (strstr(colonPos, "idle")) {
-                profiles.setProfile(PROFILE_IS_NOT_SPEAKING);
-                Serial.println(F("-> Profile: IDLE"));
-            } else {
-                Serial.println(F("-> Unknown profile specified."));
-            }
-            return;
-        }
-    }
-    
-    Serial.println(F("-> Expected JSON syntax: {\"profile\":\"navigated\"}"));
+// Safe Pixel Draw Function
+void drawPixel(int x, int y, bool color) {
+  if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) return;
+  uint16_t index = x + (y / 8) * OLED_WIDTH;
+  if (color) {
+    frameBuffer[index] |= (1 << (y % 8));
+  } else {
+    frameBuffer[index] &= ~(1 << (y % 8));
+  }
 }
