@@ -16,7 +16,7 @@ private:
 
     void sendCommand(uint8_t command) {
         Wire.beginTransmission(OLED_I2C_ADDR);
-        Wire.write(0x00);
+        Wire.write(0x00); // Command byte stream
         Wire.write(command);
         Wire.endTransmission();
     }
@@ -26,31 +26,41 @@ public:
 
     void begin() {
         Wire.begin();
-        Wire.setClock(400000L); // Fast 400kHz I2C
+        Wire.setClock(400000L); // Fast 400kHz I2C clock
+        delay(50);
 
-        sendCommand(0xAE);
-        sendCommand(0xD5); sendCommand(0x80);
-        sendCommand(0xA8); sendCommand(0x3F);
-        sendCommand(0xD3); sendCommand(0x00);
-        sendCommand(0x40);
-        sendCommand(0x8D); sendCommand(0x14);
+        // Fixed SSD1306 OLED Initialization Sequence
+        sendCommand(0xAE); // Display OFF
+        sendCommand(0xD5); sendCommand(0x80); // Set display clock divide ratio
+        sendCommand(0xA8); sendCommand(0x3F); // Set multiplex ratio (64MUX)
+        sendCommand(0xD3); sendCommand(0x00); // Set display offset
+        sendCommand(0x40);                     // Set start line #0
+        sendCommand(0x8D); sendCommand(0x14); // Enable charge pump
+        
+        // Horizontal Addressing Mode (0x20, 0x00) prevents garbage output
         sendCommand(0x20); sendCommand(0x00);
-        sendCommand(0xA1);
-        sendCommand(0xC8);
-        sendCommand(0xDA); sendCommand(0x12);
-        sendCommand(0x81); sendCommand(0xCF);
-        sendCommand(0xD9); sendCommand(0xF1);
-        sendCommand(0xDB); sendCommand(0x40);
-        sendCommand(0xA4);
-        sendCommand(0xA6);
-        sendCommand(0xAF);
+
+        sendCommand(0xA1); // Column remap (SEG0 to 127)
+        sendCommand(0xC8); // COM scan direction remapped
+        sendCommand(0xDA); sendCommand(0x12); // Set COM pins hardware config
+        sendCommand(0x81); sendCommand(0xCF); // Set contrast control
+        sendCommand(0xD9); sendCommand(0xF1); // Set pre-charge period
+        sendCommand(0xDB); sendCommand(0x40); // Set VCOMH deselect level
+        sendCommand(0xA4);                     // Entire display ON
+        sendCommand(0xA6);                     // Normal display mode
+        sendCommand(0xAF); // Display ON
 
         clear();
         display();
     }
 
-    void clear() { memset(buffer, 0x00, sizeof(buffer)); }
-    void fillScreen() { memset(buffer, 0xFF, sizeof(buffer)); }
+    void clear() {
+        memset(buffer, 0x00, sizeof(buffer));
+    }
+
+    void fillScreen() {
+        memset(buffer, 0xFF, sizeof(buffer));
+    }
 
     void setInvertDisplay(bool invert) {
         invertedMode = invert;
@@ -59,9 +69,13 @@ public:
 
     void setPixel(int16_t x, int16_t y, uint8_t color = 1) {
         if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) return;
+        
         uint16_t index = x + (y / 8) * OLED_WIDTH;
-        if (color) buffer[index] |= (1 << (y % 8));
-        else buffer[index] &= ~(1 << (y % 8));
+        if (color) {
+            buffer[index] |= (1 << (y % 8));
+        } else {
+            buffer[index] &= ~(1 << (y % 8));
+        }
     }
 
     void drawFastHLine(int16_t x, int16_t y, int16_t w, uint8_t color = 1) {
@@ -96,9 +110,13 @@ public:
             uint8_t line = pgm_read_byte(&(font8x8[charIndex][col]));
             for (uint8_t row = 0; row < 8; row++) {
                 if (line & (1 << row)) {
-                    for (uint8_t sx = 0; sx < scale; sx++) {
-                        for (uint8_t sy = 0; sy < scale; sy++) {
-                            setPixel(x + (col * scale) + sx, y + (row * scale) + sy, color);
+                    if (scale == 1) {
+                        setPixel(x + col, y + row, color);
+                    } else {
+                        for (uint8_t sx = 0; sx < scale; sx++) {
+                            for (uint8_t sy = 0; sy < scale; sy++) {
+                                setPixel(x + (col * scale) + sx, y + (row * scale) + sy, color);
+                            }
                         }
                     }
                 }
@@ -116,7 +134,8 @@ public:
     }
 
     void drawCenteredString(int16_t y, const char *str, uint8_t color = 1, uint8_t scale = 1) {
-        int16_t totalWidth = strlen(str) * 8 * scale;
+        uint8_t len = strlen(str);
+        int16_t totalWidth = len * 8 * scale;
         int16_t x = (OLED_WIDTH - totalWidth) / 2;
         if (x < 0) x = 0;
         drawString(x, y, str, color, scale);
@@ -125,15 +144,24 @@ public:
     void fillCircle(int16_t x0, int16_t y0, int16_t r, uint8_t color = 1) {
         for (int16_t y = -r; y <= r; y++) {
             for (int16_t x = -r; x <= r; x++) {
-                if (x * x + y * y <= r * r) setPixel(x0 + x, y0 + y, color);
+                if (x * x + y * y <= r * r) {
+                    setPixel(x0 + x, y0 + y, color);
+                }
             }
         }
     }
 
+    // Fixed Buffer Transmission using 0x21 and 0x22 commands
     void display() {
-        sendCommand(0x21); sendCommand(0); sendCommand(127);
-        sendCommand(0x22); sendCommand(0); sendCommand(7);
+        sendCommand(0x21); // Set column address
+        sendCommand(0);
+        sendCommand(127);
 
+        sendCommand(0x22); // Set page address
+        sendCommand(0);
+        sendCommand(7);
+
+        // Send 1024 bytes in 16-byte Wire packets
         for (uint16_t i = 0; i < sizeof(buffer); i += 16) {
             Wire.beginTransmission(OLED_I2C_ADDR);
             Wire.write(0x40);

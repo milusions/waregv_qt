@@ -1,85 +1,76 @@
+/*
+ * Arduino Nano - SSD1306 OLED Profile Controller
+ * Built using Wire.h only
+ */
+
 #include <Wire.h>
+#include "SSD1306_Wire.h"
+#include "Profiles.h"
 
-#define OLED_ADDR 0x3C
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
+SSD1306Wire oled;
+ProfileManager profiles(oled);
 
-// 128x64 frame buffer (1024 bytes)
-uint8_t frameBuffer[OLED_WIDTH * OLED_HEIGHT / 8];
+char serialBuffer[64];
+uint8_t bufferIdx = 0;
 
-// Send single command byte to SSD1306
-void sendCommand(uint8_t cmd) {
-  Wire.beginTransmission(OLED_ADDR);
-  Wire.write(0x00); // Command stream header
-  Wire.write(cmd);
-  Wire.endTransmission();
+void setup() {
+    Serial.begin(115200);
+    while (!Serial) { ; }
+
+    Serial.println(F("--- OLED Profile Controller Online ---"));
+
+    // Initialize OLED hardware
+    oled.begin();
+
+    // Default profile state
+    profiles.setProfile(PROFILE_BOOTING);
 }
 
-// Corrected SSD1306 OLED Initialization
-void initOLED() {
-  Wire.begin();
-  Wire.setClock(400000L); // Fast 400kHz I2C clock
-  delay(50);
-  
-  sendCommand(0xAE); // Display OFF
-  sendCommand(0xD5); sendCommand(0x80); // Set display clock divide ratio
-  sendCommand(0xA8); sendCommand(0x3F); // Set multiplex ratio (64MUX)
-  sendCommand(0xD3); sendCommand(0x00); // Set display offset (no offset)
-  sendCommand(0x40);                     // Set start line #0
-  sendCommand(0x8D); sendCommand(0x14); // Enable charge pump
-  
-  // FIX 1: Set Memory Addressing Mode to Horizontal Addressing (0x20, 0x00)
-  sendCommand(0x20); sendCommand(0x00); 
-  
-  sendCommand(0xA1); // Column remap (SEG0 to 127)
-  sendCommand(0xC8); // COM scan direction remapped
-  sendCommand(0xDA); sendCommand(0x12); // Set COM pins hardware config
-  sendCommand(0x81); sendCommand(0xCF); // Set contrast control
-  sendCommand(0xD9); sendCommand(0xF1); // Set pre-charge period
-  sendCommand(0xDB); sendCommand(0x40); // Set VCOMH deselect level
-  sendCommand(0xA4);                     // Entire display ON (resume to RAM)
-  sendCommand(0xA6);                     // Normal display mode
-  sendCommand(0xAF); // Display ON
+void loop() {
+    // 1. Listen for incoming JSON serial commands
+    checkSerialInput();
 
-  clearBuffer();
-  renderBuffer();
+    // 2. Render and animate current profile
+    profiles.update();
 }
 
-// Clear local RAM buffer
-void clearBuffer() {
-  memset(frameBuffer, 0, sizeof(frameBuffer));
-}
+void checkSerialInput() {
+    while (Serial.available() > 0) {
+        char c = Serial.read();
 
-// Corrected Buffer Renderer using 0x21 (Column) & 0x22 (Page) addressing
-void renderBuffer() {
-  // Set Column Address Range: 0 to 127
-  sendCommand(0x21);
-  sendCommand(0);
-  sendCommand(127);
-
-  // Set Page Address Range: 0 to 7
-  sendCommand(0x22);
-  sendCommand(0);
-  sendCommand(7);
-
-  // Stream full 1024-byte framebuffer in 16-byte Wire transmissions
-  for (uint16_t i = 0; i < sizeof(frameBuffer); i += 16) {
-    Wire.beginTransmission(OLED_ADDR);
-    Wire.write(0x40); // Data stream header
-    for (uint8_t j = 0; j < 16; j++) {
-      Wire.write(frameBuffer[i + j]);
+        if (c == '\n' || c == '\r') {
+            if (bufferIdx > 0) {
+                serialBuffer[bufferIdx] = '\0';
+                parseJsonCommand(serialBuffer);
+                bufferIdx = 0;
+            }
+        } else if (bufferIdx < sizeof(serialBuffer) - 1) {
+            serialBuffer[bufferIdx++] = c;
+        }
     }
-    Wire.endTransmission();
-  }
 }
 
-// Safe Pixel Draw Function
-void drawPixel(int x, int y, bool color) {
-  if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) return;
-  uint16_t index = x + (y / 8) * OLED_WIDTH;
-  if (color) {
-    frameBuffer[index] |= (1 << (y % 8));
-  } else {
-    frameBuffer[index] &= ~(1 << (y % 8));
-  }
+void parseJsonCommand(const char* jsonStr) {
+    Serial.print(F("Received: "));
+    Serial.println(jsonStr);
+
+    const char* keyPos = strstr(jsonStr, "\"profile\"");
+    if (!keyPos) keyPos = strstr(jsonStr, "profile");
+
+    if (keyPos) {
+        const char* colonPos = strchr(keyPos, ':');
+        if (colonPos) {
+            if (strstr(colonPos, "goal_received")) profiles.setProfile(PROFILE_GOAL_RECEIVED);
+            else if (strstr(colonPos, "navigated")) profiles.setProfile(PROFILE_NAVIGATED);
+            else if (strstr(colonPos, "goal_reached")) profiles.setProfile(PROFILE_GOAL_REACHED);
+            else if (strstr(colonPos, "navigation_error")) profiles.setProfile(PROFILE_NAVIGATION_ERROR);
+            else if (strstr(colonPos, "is_speaking")) profiles.setProfile(PROFILE_IS_SPEAKING);
+            else if (strstr(colonPos, "is_not_speaking")) profiles.setProfile(PROFILE_IS_NOT_SPEAKING);
+            else if (strstr(colonPos, "booting")) profiles.setProfile(PROFILE_BOOTING);
+            else if (strstr(colonPos, "idle")) profiles.setProfile(PROFILE_IS_NOT_SPEAKING);
+            else if (strstr(colonPos, "info")) profiles.setProfile(PROFILE_INFO);
+            else if (strstr(colonPos, "success")) profiles.setProfile(PROFILE_SUCCESS);
+            else if (strstr(colonPos, "error")) profiles.setProfile(PROFILE_ERROR);
+        }
+    }
 }

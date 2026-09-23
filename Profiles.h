@@ -9,7 +9,6 @@ enum ProfileType {
     PROFILE_INFO,
     PROFILE_SUCCESS,
     PROFILE_ERROR,
-    // ROS 2 Communication Profiles
     PROFILE_GOAL_RECEIVED,
     PROFILE_NAVIGATED,
     PROFILE_GOAL_REACHED,
@@ -40,7 +39,9 @@ public:
         oled.display();
     }
 
-    ProfileType getCurrentProfile() const { return currentProfile; }
+    ProfileType getCurrentProfile() const {
+        return currentProfile;
+    }
 
     void update() {
         unsigned long now = millis();
@@ -58,7 +59,7 @@ public:
                 if (now - lastAnimTime >= 120) {
                     lastAnimTime = now;
                     renderGoalReceived();
-                    animStep = (animStep + 1) % 6; // Flashing eye state
+                    animStep = (animStep + 1) % 6;
                 }
                 break;
 
@@ -66,7 +67,7 @@ public:
                 if (now - lastAnimTime >= 150) {
                     lastAnimTime = now;
                     renderNavigated();
-                    animStep = (animStep + 1) % 4; // Eye panning / arrow
+                    animStep = (animStep + 1) % 4;
                 }
                 break;
 
@@ -74,7 +75,7 @@ public:
                 if (now - lastAnimTime >= 200) {
                     lastAnimTime = now;
                     renderGoalReached();
-                    animStep = (animStep + 1) % 4; // Bouncing face
+                    animStep = (animStep + 1) % 4;
                 }
                 break;
 
@@ -82,7 +83,7 @@ public:
                 if (now - lastAnimTime >= 250) {
                     lastAnimTime = now;
                     renderNavigationError();
-                    animStep = (animStep + 1) % 2; // Screen flash
+                    animStep = (animStep + 1) % 2;
                 }
                 break;
 
@@ -90,22 +91,30 @@ public:
                 if (now - lastAnimTime >= 80) {
                     lastAnimTime = now;
                     renderIsSpeaking();
-                    animStep = (animStep + 1) % 8; // Equalizer bar animation
+                    animStep = (animStep + 1) % 8;
                 }
                 break;
 
             case PROFILE_IS_NOT_SPEAKING:
             case PROFILE_IDLE:
-                // Passive eye-blinking every 3 seconds
                 if (now - lastBlinkTime >= 3000) {
                     eyeOpen = !eyeOpen;
                     if (eyeOpen) lastBlinkTime = now;
-                    else lastBlinkTime = now - 2800; // Blink duration 200ms
+                    else lastBlinkTime = now - 2800;
                 }
                 renderIsNotSpeaking();
                 break;
 
-            default:
+            case PROFILE_INFO:
+                renderInfoProfile();
+                break;
+
+            case PROFILE_SUCCESS:
+                renderSuccessProfile();
+                break;
+
+            case PROFILE_ERROR:
+                renderErrorProfile();
                 break;
         }
     }
@@ -121,7 +130,6 @@ private:
         oled.drawCenteredString(54, subtitle, 1, 1);
     }
 
-    // BOOTING PROFILE
     void renderBootingProfile() {
         oled.fillScreen();
         oled.drawCenteredString(14, "BOOTING", 0, 2);
@@ -145,7 +153,6 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 1: GOAL RECEIVED
     void renderGoalReceived() {
         oled.clear();
         drawHeader("STATUS: TARGET");
@@ -160,7 +167,6 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 2: NAVIGATED
     void renderNavigated() {
         oled.clear();
         drawHeader("NAVIGATING");
@@ -179,7 +185,6 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 3: GOAL REACHED
     void renderGoalReached() {
         oled.clear();
         drawHeader("SUCCESS");
@@ -194,7 +199,6 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 4: NAVIGATION ERROR
     void renderNavigationError() {
         oled.clear();
         
@@ -214,12 +218,10 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 5: IS SPEAKING
     void renderIsSpeaking() {
         oled.clear();
         drawHeader("AUDIO OUTPUT");
 
-        // Dynamic 5-bar equalizer audio spectrum animation
         uint8_t heights[8][5] = {
             { 4, 12, 20, 12,  4 },
             { 8, 18, 12, 22,  8 },
@@ -243,7 +245,6 @@ private:
         oled.display();
     }
 
-    // ROS 2 PROFILE 6: IS NOT SPEAKING
     void renderIsNotSpeaking() {
         oled.clear();
         drawHeader("STANDBY");
@@ -255,6 +256,32 @@ private:
         }
 
         drawFooter("Listening...");
+        oled.display();
+    }
+
+    void renderInfoProfile() {
+        oled.clear();
+        drawHeader("SYSTEM INFO");
+        oled.drawString(10, 20, "CPU: 16MHz", 1, 1);
+        oled.drawString(10, 34, "I2C: 400kHz", 1, 1);
+        drawFooter("ROS2 Connected");
+        oled.display();
+    }
+
+    void renderSuccessProfile() {
+        oled.clear();
+        drawHeader("SYSTEM OK");
+        oled.drawCenteredString(24, " READY ", 1, 2);
+        drawFooter("Online");
+        oled.display();
+    }
+
+    void renderErrorProfile() {
+        oled.setInvertDisplay(true);
+        oled.clear();
+        drawHeader("SYSTEM ERROR");
+        oled.drawCenteredString(24, " FAIL ", 1, 2);
+        drawFooter("Check Wire");
         oled.display();
     }
 };
