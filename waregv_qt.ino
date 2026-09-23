@@ -1,6 +1,6 @@
 /*
  * Arduino Nano - SSD1306 OLED Profile Controller
- * Built using Wire.h only
+ * Libraries used: Standard Wire.h ONLY
  */
 
 #include <Wire.h>

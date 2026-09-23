@@ -120,19 +120,19 @@ public:
     }
 
 private:
-    void drawHeader(const char* title) {
+    void drawHeader(const __FlashStringHelper* title) {
         oled.fillRect(0, 0, 128, 12, 1);
         oled.drawCenteredString(2, title, 0, 1);
     }
 
-    void drawFooter(const char* subtitle) {
+    void drawFooter(const __FlashStringHelper* subtitle) {
         oled.drawFastHLine(0, 52, 128, 1);
         oled.drawCenteredString(54, subtitle, 1, 1);
     }
 
     void renderBootingProfile() {
         oled.fillScreen();
-        oled.drawCenteredString(14, "BOOTING", 0, 2);
+        oled.drawCenteredString(14, F("BOOTING"), 0, 2);
 
         int16_t centerX = 64, centerY = 48;
         const int8_t dx[8] = { 9,  6,  0, -6, -9, -6,  0,  6 };
@@ -155,47 +155,47 @@ private:
 
     void renderGoalReceived() {
         oled.clear();
-        drawHeader("STATUS: TARGET");
+        drawHeader(F("STATUS: TARGET"));
 
         if (animStep % 2 == 0) {
-            oled.drawCenteredString(24, " (O_O) ", 1, 2);
+            oled.drawCenteredString(24, F(" (O_O) "), 1, 2);
         } else {
-            oled.drawCenteredString(24, " [o_o] ", 1, 2);
+            oled.drawCenteredString(24, F(" [o_o] "), 1, 2);
         }
 
-        drawFooter("Target Set");
+        drawFooter(F("Target Set"));
         oled.display();
     }
 
     void renderNavigated() {
         oled.clear();
-        drawHeader("NAVIGATING");
+        drawHeader(F("NAVIGATING"));
 
         if (animStep == 0) {
-            oled.drawCenteredString(24, " ( ._.)> ", 1, 2);
+            oled.drawCenteredString(24, F(" ( ._.)> "), 1, 2);
         } else if (animStep == 1) {
-            oled.drawCenteredString(24, " ( •_•)> ", 1, 2);
+            oled.drawCenteredString(24, F(" ( •_•)> "), 1, 2);
         } else if (animStep == 2) {
-            oled.drawCenteredString(24, " ( •_•)>=", 1, 2);
+            oled.drawCenteredString(24, F(" ( •_•)>="), 1, 2);
         } else {
-            oled.drawCenteredString(24, " (•_• )> ", 1, 2);
+            oled.drawCenteredString(24, F(" (•_• )> "), 1, 2);
         }
 
-        drawFooter("Moving to target...");
+        drawFooter(F("Moving to target..."));
         oled.display();
     }
 
     void renderGoalReached() {
         oled.clear();
-        drawHeader("SUCCESS");
+        drawHeader(F("SUCCESS"));
 
         if (animStep % 2 == 0) {
-            oled.drawCenteredString(22, " (^ _ ^) ", 1, 2);
+            oled.drawCenteredString(22, F(" (^ _ ^) "), 1, 2);
         } else {
-            oled.drawCenteredString(26, " (^ - ^) ", 1, 2);
+            oled.drawCenteredString(26, F(" (^ - ^) "), 1, 2);
         }
 
-        drawFooter("Arrived safely");
+        drawFooter(F("Arrived safely"));
         oled.display();
     }
 
@@ -204,15 +204,15 @@ private:
         
         if (animStep == 0) {
             oled.setInvertDisplay(true);
-            drawHeader("ALERT / ERROR");
-            oled.drawCenteredString(24, " (>_<) ! ", 1, 2);
-            drawFooter("Path Blocked");
+            drawHeader(F("ALERT / ERROR"));
+            oled.drawCenteredString(24, F(" (>_<) ! "), 1, 2);
+            drawFooter(F("Path Blocked"));
         } else {
             oled.setInvertDisplay(false);
             oled.drawRect(0, 0, 128, 64, 1);
-            drawHeader("ALERT / ERROR");
-            oled.drawCenteredString(24, " (X_X) ! ", 1, 2);
-            drawFooter("Canceled");
+            drawHeader(F("ALERT / ERROR"));
+            oled.drawCenteredString(24, F(" (X_X) ! "), 1, 2);
+            drawFooter(F("Canceled"));
         }
 
         oled.display();
@@ -220,7 +220,7 @@ private:
 
     void renderIsSpeaking() {
         oled.clear();
-        drawHeader("AUDIO OUTPUT");
+        drawHeader(F("AUDIO OUTPUT"));
 
         uint8_t heights[8][5] = {
             { 4, 12, 20, 12,  4 },
@@ -241,47 +241,47 @@ private:
             oled.fillRect(startX + (i * 12), baseY - h, 8, h, 1);
         }
 
-        drawFooter("Voice Active");
+        drawFooter(F("Voice Active"));
         oled.display();
     }
 
     void renderIsNotSpeaking() {
         oled.clear();
-        drawHeader("STANDBY");
+        drawHeader(F("STANDBY"));
 
         if (eyeOpen) {
-            oled.drawCenteredString(24, " ( -_- ) ", 1, 2);
+            oled.drawCenteredString(24, F(" ( -_- ) "), 1, 2);
         } else {
-            oled.drawCenteredString(24, " ( ___ ) ", 1, 2);
+            oled.drawCenteredString(24, F(" ( ___ ) "), 1, 2);
         }
 
-        drawFooter("Listening...");
+        drawFooter(F("Listening..."));
         oled.display();
     }
 
     void renderInfoProfile() {
         oled.clear();
-        drawHeader("SYSTEM INFO");
-        oled.drawString(10, 20, "CPU: 16MHz", 1, 1);
-        oled.drawString(10, 34, "I2C: 400kHz", 1, 1);
-        drawFooter("ROS2 Connected");
+        drawHeader(F("SYSTEM INFO"));
+        oled.drawString(10, 20, F("CPU: 16MHz"), 1, 1);
+        oled.drawString(10, 34, F("I2C: 400kHz"), 1, 1);
+        drawFooter(F("ROS2 Connected"));
         oled.display();
     }
 
     void renderSuccessProfile() {
         oled.clear();
-        drawHeader("SYSTEM OK");
-        oled.drawCenteredString(24, " READY ", 1, 2);
-        drawFooter("Online");
+        drawHeader(F("SYSTEM OK"));
+        oled.drawCenteredString(24, F(" READY "), 1, 2);
+        drawFooter(F("Online"));
         oled.display();
     }
 
     void renderErrorProfile() {
         oled.setInvertDisplay(true);
         oled.clear();
-        drawHeader("SYSTEM ERROR");
-        oled.drawCenteredString(24, " FAIL ", 1, 2);
-        drawFooter("Check Wire");
+        drawHeader(F("SYSTEM ERROR"));
+        oled.drawCenteredString(24, F(" FAIL "), 1, 2);
+        drawFooter(F("Check Wire"));
         oled.display();
     }
 };

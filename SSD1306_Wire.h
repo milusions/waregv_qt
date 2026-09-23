@@ -16,7 +16,7 @@ private:
 
     void sendCommand(uint8_t command) {
         Wire.beginTransmission(OLED_I2C_ADDR);
-        Wire.write(0x00); // Command byte stream
+        Wire.write(0x00);
         Wire.write(command);
         Wire.endTransmission();
     }
@@ -26,29 +26,25 @@ public:
 
     void begin() {
         Wire.begin();
-        Wire.setClock(400000L); // Fast 400kHz I2C clock
+        Wire.setClock(400000L);
         delay(50);
 
-        // Fixed SSD1306 OLED Initialization Sequence
-        sendCommand(0xAE); // Display OFF
-        sendCommand(0xD5); sendCommand(0x80); // Set display clock divide ratio
-        sendCommand(0xA8); sendCommand(0x3F); // Set multiplex ratio (64MUX)
-        sendCommand(0xD3); sendCommand(0x00); // Set display offset
-        sendCommand(0x40);                     // Set start line #0
-        sendCommand(0x8D); sendCommand(0x14); // Enable charge pump
-        
-        // Horizontal Addressing Mode (0x20, 0x00) prevents garbage output
-        sendCommand(0x20); sendCommand(0x00);
-
-        sendCommand(0xA1); // Column remap (SEG0 to 127)
-        sendCommand(0xC8); // COM scan direction remapped
-        sendCommand(0xDA); sendCommand(0x12); // Set COM pins hardware config
-        sendCommand(0x81); sendCommand(0xCF); // Set contrast control
-        sendCommand(0xD9); sendCommand(0xF1); // Set pre-charge period
-        sendCommand(0xDB); sendCommand(0x40); // Set VCOMH deselect level
-        sendCommand(0xA4);                     // Entire display ON
-        sendCommand(0xA6);                     // Normal display mode
-        sendCommand(0xAF); // Display ON
+        sendCommand(0xAE);
+        sendCommand(0xD5); sendCommand(0x80);
+        sendCommand(0xA8); sendCommand(0x3F);
+        sendCommand(0xD3); sendCommand(0x00);
+        sendCommand(0x40);
+        sendCommand(0x8D); sendCommand(0x14);
+        sendCommand(0x20); sendCommand(0x00); // Horizontal addressing mode
+        sendCommand(0xA1);
+        sendCommand(0xC8);
+        sendCommand(0xDA); sendCommand(0x12);
+        sendCommand(0x81); sendCommand(0xCF);
+        sendCommand(0xD9); sendCommand(0xF1);
+        sendCommand(0xDB); sendCommand(0x40);
+        sendCommand(0xA4);
+        sendCommand(0xA6);
+        sendCommand(0xAF);
 
         clear();
         display();
@@ -69,7 +65,6 @@ public:
 
     void setPixel(int16_t x, int16_t y, uint8_t color = 1) {
         if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) return;
-        
         uint16_t index = x + (y / 8) * OLED_WIDTH;
         if (color) {
             buffer[index] |= (1 << (y % 8));
@@ -133,12 +128,34 @@ public:
         }
     }
 
+    // PROGMEM F() string overload
+    void drawString(int16_t x, int16_t y, const __FlashStringHelper *ifsh, uint8_t color = 1, uint8_t scale = 1) {
+        PGM_P p = reinterpret_cast<PGM_P>(ifsh);
+        int16_t curX = x;
+        while (1) {
+            unsigned char c = pgm_read_byte(p++);
+            if (!c) break;
+            drawChar(curX, y, c, color, scale);
+            curX += (8 * scale);
+        }
+    }
+
     void drawCenteredString(int16_t y, const char *str, uint8_t color = 1, uint8_t scale = 1) {
         uint8_t len = strlen(str);
         int16_t totalWidth = len * 8 * scale;
         int16_t x = (OLED_WIDTH - totalWidth) / 2;
         if (x < 0) x = 0;
         drawString(x, y, str, color, scale);
+    }
+
+    // PROGMEM F() string overload
+    void drawCenteredString(int16_t y, const __FlashStringHelper *ifsh, uint8_t color = 1, uint8_t scale = 1) {
+        PGM_P p = reinterpret_cast<PGM_P>(ifsh);
+        uint8_t len = strlen_P(p);
+        int16_t totalWidth = len * 8 * scale;
+        int16_t x = (OLED_WIDTH - totalWidth) / 2;
+        if (x < 0) x = 0;
+        drawString(x, y, ifsh, color, scale);
     }
 
     void fillCircle(int16_t x0, int16_t y0, int16_t r, uint8_t color = 1) {
@@ -151,17 +168,10 @@ public:
         }
     }
 
-    // Fixed Buffer Transmission using 0x21 and 0x22 commands
     void display() {
-        sendCommand(0x21); // Set column address
-        sendCommand(0);
-        sendCommand(127);
+        sendCommand(0x21); sendCommand(0); sendCommand(127);
+        sendCommand(0x22); sendCommand(0); sendCommand(7);
 
-        sendCommand(0x22); // Set page address
-        sendCommand(0);
-        sendCommand(7);
-
-        // Send 1024 bytes in 16-byte Wire packets
         for (uint16_t i = 0; i < sizeof(buffer); i += 16) {
             Wire.beginTransmission(OLED_I2C_ADDR);
             Wire.write(0x40);
