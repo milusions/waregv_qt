@@ -95,7 +95,6 @@ public:
         }
     }
 
-    // Missing helper: drawLine (Bresenham's line algorithm)
     void drawLine(int x0, int y0, int x1, int y1, uint8_t color = 1) {
         int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
         int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
@@ -109,7 +108,6 @@ public:
         }
     }
 
-    // Missing helper: fillRoundRect (used for biological eyes & chat bubbles)
     void fillRoundRect(int x, int y, int w, int h, int r, uint8_t color = 1) {
         for (int i = x; i < x + w; i++) {
             for (int j = y; j < y + h; j++) {
@@ -124,8 +122,8 @@ public:
         }
     }
 
-    // Missing helper: fillTriangle (used for speech bubble tails & thinking indicators)
-    void fillTriangle(int x0, int0, int x1, int y1, int x2, int y2, uint8_t color = 1) {
+    // Fixed fillTriangle signature (corrected int0 -> y0)
+    void fillTriangle(int x0, int y0, int x1, int y1, int x2, int y2, uint8_t color = 1) {
         int a, b, y, last;
         if (y0 > y1) { int t=y0; y0=y1; y1=t; t=x0; x0=x1; x1=t; }
         if (y1 > y2) { int t=y1; y1=y2; y2=t; t=x1; x1=x2; x2=t; }
@@ -181,12 +179,7 @@ public:
         }
     }
 
-    // Missing helper: drawString5x7 (compatibility wrapper for Profiles.h)
-    void drawString5x7(int x, int y, const char* text, uint8_t color = 1) {
-        drawString(x, y, text, color, 1);
-    }
-
-    // PROGMEM F() string overload
+    // PROGMEM F() string overload for drawString
     void drawString(int16_t x, int16_t y, const __FlashStringHelper *ifsh, uint8_t color = 1, uint8_t scale = 1) {
         PGM_P p = reinterpret_cast<PGM_P>(ifsh);
         int16_t curX = x;
@@ -198,6 +191,15 @@ public:
         }
     }
 
+    // drawString5x7 overloads for standard strings and Flash strings
+    void drawString5x7(int x, int y, const char* text, uint8_t color = 1) {
+        drawString(x, y, text, color, 1);
+    }
+
+    void drawString5x7(int x, int y, const __FlashStringHelper* ifsh, uint8_t color = 1) {
+        drawString(x, y, ifsh, color, 1);
+    }
+
     void drawCenteredString(int16_t y, const char *str, uint8_t color = 1, uint8_t scale = 1) {
         uint8_t len = strlen(str);
         int16_t totalWidth = len * 8 * scale;
@@ -206,7 +208,6 @@ public:
         drawString(x, y, str, color, scale);
     }
 
-    // PROGMEM F() string overload
     void drawCenteredString(int16_t y, const __FlashStringHelper *ifsh, uint8_t color = 1, uint8_t scale = 1) {
         PGM_P p = reinterpret_cast<PGM_P>(ifsh);
         uint8_t len = strlen_P(p);
