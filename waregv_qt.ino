@@ -474,9 +474,9 @@ private:
         xOff = (frame % 8 < 4) ? -4 : 4;
         drawEmoEyes(xOff, 0, style);
         // Canvas & Brush
-        oled.drawRect(8, 30, 20, 26, true);
+        oled.rect(8, 30, 20, 26, true);
         oled.fillRect(10, 32, 16, 22, true);
-        oled.drawLine(28, 56, 38, 40, true);
+        oled.line(28, 56, 38, 40, true);
         oled.fillCircle(38, 40, 2, true); // brush tip
         // Move Base (Clamped in sendVel)
         if (frame == 3) sendVel(0.0, 0.2);
