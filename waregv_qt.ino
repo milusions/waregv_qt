@@ -5,7 +5,7 @@
  *
  * Target:
  *   Arduino Nano / ATmega328P
- *   SSD1306 128x64 I2C OLED
+ *   SSD1306/SH1106 128x64 I2C OLED
  *
  * Libraries:
  *   Wire.h
@@ -42,6 +42,10 @@
 #define OLED_HEIGHT          64
 #define OLED_PAGES           8
 #define OLED_BUFFER_SIZE     1024
+
+// Set to 2 if using a 1.3" SH1106 OLED (removes right-side garbage pixels)
+// Set to 0 if using a standard 0.96" SSD1306 OLED
+#define OLED_COL_OFFSET      2 
 
 #define OLED_I2C_CHUNK       16
 #define I2C_RETRIES          3
@@ -119,7 +123,7 @@ const uint8_t PROGMEM FONT5X7[][5] = {
 };
 
 // ============================================================================
-// LOW-LEVEL SSD1306 DRIVER
+// LOW-LEVEL SSD1306/SH1106 DRIVER
 // ============================================================================
 class SSD1306Nano {
 private:
@@ -185,7 +189,11 @@ public:
 
     command(0xAE); command2(0xD5, 0x80); command2(0xA8, 0x3F);
     command2(0xD3, 0x00); command(0x40); command2(0x8D, 0x14);
-    command2(0x20, 0x00); command(0xA1); command(0xC8);
+    
+    // Page addressing mode (0x02) supports both SSD1306 and SH1106 seamlessly
+    command2(0x20, 0x02); 
+    
+    command(0xA1); command(0xC8);
     command2(0xDA, 0x12); command2(0x81, 0x8F); command2(0xD9, 0xF1);
     command2(0xDB, 0x40); command(0xA4); command(0xA6);
     command(0x2E); command(0xAF);
@@ -300,8 +308,11 @@ public:
     if (!connected) return false;
     for (uint8_t page = 0; page < OLED_PAGES; ++page) {
       if (!command(0xB0 | page)) return false;
-      if (!command(0x00)) return false;
-      if (!command(0x10)) return false;
+      
+      // Apply the column offset to push garbage out of view on SH1106 displays
+      if (!command(0x00 | (OLED_COL_OFFSET & 0x0F))) return false;
+      if (!command(0x10 | (OLED_COL_OFFSET >> 4))) return false;
+      
       uint16_t base = (uint16_t)page * OLED_WIDTH;
       for (uint8_t column = 0; column < OLED_WIDTH; column += OLED_I2C_CHUNK) {
         if (!writeChunk(page, column, &framebuffer[base + column], OLED_I2C_CHUNK)) return false;
