@@ -20,6 +20,7 @@
  *   {"profile":"idle"}
  *   {"profile":"listening"}
  *   {"profile":"speaking"}
+ *   {"profile":"text", "text":"Hello"}
  * 
  * Kinematic Outputs (sent from Arduino to Host):
  *   {"cmd_vel":{"linear":0.0,"angular":0.0}}
@@ -49,13 +50,15 @@
 
 #define OLED_I2C_CHUNK       16
 #define I2C_RETRIES          3
-#define SERIAL_BUFFER_SIZE   64
+
+// Increased buffer to handle longer text payloads
+#define SERIAL_BUFFER_SIZE   128 
 
 
 // ============================================================================
-// HELIO FONT (5x7)
+// ROBOTO FONT (5x7 Compact)
 // ============================================================================
-const uint8_t PROGMEM FONT5X7[][5] = {
+const uint8_t PROGMEM ROBOTO_5X7[][5] = {
   {0x00,0x00,0x00,0x00,0x00}, // 32 SPACE
   {0x00,0x00,0x5F,0x00,0x00}, // !
   {0x00,0x07,0x00,0x07,0x00}, // "
@@ -290,7 +293,7 @@ public:
     if (c < 32 || c > 95) c = ' ';
     uint8_t index = (uint8_t)c - 32;
     for (uint8_t col = 0; col < 5; ++col) {
-      uint8_t bits = pgm_read_byte(&FONT5X7[index][col]);
+      uint8_t bits = pgm_read_byte(&ROBOTO_5X7[index][col]);
       for (uint8_t row = 0; row < 7; ++row) {
         if (bits & (1U << row)) {
           if (scale == 1) pixel(x + col, y + row, on);
@@ -300,8 +303,23 @@ public:
     }
   }
 
+  uint16_t textWidth(const char *text, uint8_t scale = 1) const {
+    if (!text) return 0;
+    uint16_t len = strlen(text);
+    if (len == 0) return 0;
+    return (uint16_t)(len * 6UL * scale - scale);
+  }
+
   void text(int16_t x, int16_t y, const char *str, bool on = true, uint8_t scale = 1) {
     while (*str) { char5x7(x, y, *str, on, scale); x += 6 * scale; ++str; }
+  }
+
+  void centeredText(int16_t y, const char *str, bool on = true, uint8_t scale = 1) {
+    if (!str) return;
+    uint16_t width = textWidth(str, scale);
+    int16_t x = (OLED_WIDTH - width) / 2;
+    if (x < 0) x = 0;
+    text(x, y, str, on, scale);
   }
 
   bool display() {
@@ -331,6 +349,7 @@ enum Profile {
   PROFILE_IDLE,
   PROFILE_LISTENING,
   PROFILE_SPEAKING,
+  PROFILE_TEXT,
   PROFILE_INFO,
   PROFILE_SUCCESS,
   PROFILE_ERROR,
@@ -356,15 +375,14 @@ private:
   IdleSubState idleState;
   uint8_t frame;
   unsigned long lastFrame;
+  unsigned long lastSubStateChange; 
+  
+  char customText[32]; // Buffer to store text payloads
 
   // Sends kinematic velocity commands to the host (e.g. ROS / rover base)
   void sendVel(float lin, float ang) {
-    
-    // Clamp linear velocity to +/- 0.07
     if (lin > 0.07) lin = 0.07;
     if (lin < -0.07) lin = -0.07;
-    
-    // Clamp angular velocity to +/- 0.2
     if (ang > 0.2) ang = 0.2;
     if (ang < -0.2) ang = -0.2;
 
@@ -389,7 +407,7 @@ private:
     } else if (style == 2) { // Squint / Shoot
       oled.fillRoundRect(lx, y + 10, w, h - 10, 4, true);
       oled.fillRoundRect(rx, y + 10, w, h - 10, 4, true);
-      oled.fillTriangle(lx, y+10, lx+10, y+10, lx, y+20, false); // Inner slant
+      oled.fillTriangle(lx, y+10, lx+10, y+10, lx, y+20, false); 
       oled.fillTriangle(rx+w, y+10, rx+w-10, y+10, rx+w, y+20, false);
     } else if (style == 3) { // Blinking
       oled.fillRect(lx, y + 14, w, 4, true);
@@ -414,17 +432,15 @@ private:
   // --------------------------------------------------------------------------
   void renderBooting() {
     oled.clear();
-    oled.text(42, 28, "HELIO", true, 2);
+    oled.centeredText(28, "HELIO", true, 2);
     oled.fillRect(14, 48, (frame * 10) % 100, 4, true);
     oled.display();
   }
 
   void renderListening() {
     oled.clear();
-    // Wide eyes, slight breathing scale
     int16_t yOffset = (frame % 4 < 2) ? 1 : 0;
     drawEmoEyes(0, yOffset, 0);
-    // Listening indicator dots
     uint8_t active = frame % 3;
     for (uint8_t i = 0; i < 3; ++i) oled.fillCircle(56 + i * 8, 56, (i == active) ? 3 : 1, true);
     oled.display();
@@ -432,20 +448,29 @@ private:
 
   void renderSpeaking() {
     oled.clear();
-    // Eyes shifting vertically simulating speech excitement
     int16_t yOffset = (frame % 2 == 0) ? -2 : 2;
     drawEmoEyes(0, yOffset, (frame % 8 == 0) ? 3 : 0);
-    // Render waving hand
     drawHand(105, 40, true);
+    oled.display();
+  }
+
+  void renderTextDisplay() {
+    oled.clear();
+    // Use scale 2 if it's short, or scale 1 if it's a long message
+    uint8_t scale = (strlen(customText) <= 10) ? 2 : 1;
+    oled.centeredText(32 - (7 * scale) / 2, customText, true, scale);
     oled.display();
   }
 
   void renderIdle() {
     oled.clear();
     
-    // Manage Idle Sub-States
-    if (frame == 0) {
+    // Only switch sub-states every 4 seconds to stop glitching/rapid flashing
+    unsigned long now = millis();
+    if (now - lastSubStateChange > 4000) {
       idleState = (IdleSubState)(random(0, 5));
+      lastSubStateChange = now;
+      frame = 0; // Reset frame animation cycle for the new sub-state
     }
 
     int16_t xOff = 0, yOff = 0;
@@ -453,14 +478,13 @@ private:
 
     switch(idleState) {
       case IDLE_NORMAL:
-        xOff = (frame > 10) ? 6 : -6;
+        xOff = (frame > 5) ? 6 : -6;
         drawEmoEyes(xOff, 0, style);
         break;
 
       case IDLE_THINK:
         yOff = -6; xOff = 6;
         drawEmoEyes(xOff, yOff, 0);
-        // Chat Bubble
         oled.fillRoundRect(8, 4, 30, 20, 4, true);
         oled.fillTriangle(28, 24, 38, 24, 34, 30, true);
         oled.fillCircle(14, 14, 1, false);
@@ -471,7 +495,6 @@ private:
       case IDLE_READ:
         yOff = 6;
         drawEmoEyes(0, yOff, style);
-        // Book
         oled.fillRoundRect(48, 50, 15, 10, 2, true);
         oled.fillRoundRect(65, 50, 15, 10, 2, true);
         oled.fillRect(50, 52, 11, 1, false);
@@ -481,29 +504,25 @@ private:
         break;
 
       case IDLE_PAINT:
-        // Eye tracking
         xOff = (frame % 8 < 4) ? -4 : 4;
         drawEmoEyes(xOff, 0, style);
-        // Canvas & Brush
         oled.rect(8, 30, 20, 26, true);
         oled.fillRect(10, 32, 16, 22, true);
         oled.line(28, 56, 38, 40, true);
-        oled.fillCircle(38, 40, 2, true); // brush tip
-        // Move Base (Clamped in sendVel)
+        oled.fillCircle(38, 40, 2, true);
         if (frame == 3) sendVel(0.0, 0.2);
-        else if (frame == 10) sendVel(0.0, -0.2);
-        else if (frame == 17) sendVel(0.0, 0.0);
+        else if (frame == 6) sendVel(0.0, -0.2);
+        else sendVel(0.0, 0.0);
         break;
 
       case IDLE_SHOOT:
-        drawEmoEyes(0, 0, 2); // Squint style
-        // Simple Gun
+        drawEmoEyes(0, 0, 2);
         oled.fillRect(12, 38, 20, 6, true);
         oled.fillRect(12, 44, 6, 10, true);
         if (frame % 4 == 0) {
-          oled.fillCircle(36, 41, 4, true); // Flash
-          sendVel(-0.07, 0.0); // Recoil back (Clamped in sendVel)
-        } else if (frame % 4 == 2) {
+          oled.fillCircle(36, 41, 4, true);
+          sendVel(-0.07, 0.0);
+        } else {
           sendVel(0.0, 0.0);
         }
         break;
@@ -512,14 +531,21 @@ private:
   }
 
 public:
-  HelioUI(SSD1306Nano &display) : oled(display), profile(PROFILE_BOOTING), frame(0), lastFrame(0) {
+  HelioUI(SSD1306Nano &display) : oled(display), profile(PROFILE_BOOTING), frame(0), lastFrame(0), lastSubStateChange(0) {
+    customText[0] = '\0';
     randomSeed(analogRead(0));
+  }
+
+  void setText(const char* t) {
+    strncpy(customText, t, 31);
+    customText[31] = '\0';
   }
 
   void setProfile(Profile p) {
     profile = p;
     frame = 0;
     lastFrame = millis();
+    lastSubStateChange = millis();
     oled.invert(false);
     render();
   }
@@ -530,9 +556,10 @@ public:
       case PROFILE_IDLE: renderIdle(); break;
       case PROFILE_LISTENING: renderListening(); break;
       case PROFILE_SPEAKING: renderSpeaking(); break;
+      case PROFILE_TEXT: renderTextDisplay(); break;
       default: 
         oled.clear();
-        oled.text(10, 28, "SYSTEM OK", true, 2);
+        oled.centeredText(28, "SYSTEM OK", true, 2);
         oled.display();
         break;
     }
@@ -540,16 +567,16 @@ public:
 
   void update() {
     unsigned long now = millis();
-    uint16_t interval = 300; // Base interval for animations
+    uint16_t interval = 300; 
 
     if (profile == PROFILE_BOOTING) interval = 100;
     else if (profile == PROFILE_SPEAKING) interval = 150;
     else if (profile == PROFILE_IDLE) interval = 350;
+    else if (profile == PROFILE_TEXT) interval = 1000; // Text is static, low refresh needed
 
     if (now - lastFrame >= interval) {
       lastFrame = now;
       ++frame;
-      if (profile == PROFILE_IDLE && frame >= 24) frame = 0;
       render();
     }
   }
@@ -586,15 +613,39 @@ void parseCommand(const char *json) {
   }
   profileName[i] = '\0';
 
-  if (strcmp(profileName, "booting") == 0) helio.setProfile(PROFILE_BOOTING);
+  // 1. Intercept "text" profile to parse the secondary value
+  if (strcmp(profileName, "text") == 0) {
+    const char *textKey = strstr(json, "\"text\"");
+    if (textKey) {
+      const char *tColon = strchr(textKey, ':');
+      if (tColon) {
+        const char *tVal = tColon + 1;
+        while (*tVal == ' ' || *tVal == '\t' || *tVal == '"' || *tVal == '\'') ++tVal;
+        
+        char msg[32];
+        uint8_t j = 0;
+        // Keep parsing until the closing quote/brace
+        while (tVal[j] && tVal[j] != '"' && tVal[j] != '\'' && tVal[j] != '}' && j < 31) {
+          msg[j] = tVal[j];
+          ++j;
+        }
+        msg[j] = '\0';
+        helio.setText(msg);
+      }
+    }
+    helio.setProfile(PROFILE_TEXT);
+  } 
+  // 2. Map standard profiles
+  else if (strcmp(profileName, "booting") == 0) helio.setProfile(PROFILE_BOOTING);
   else if (strcmp(profileName, "idle") == 0) helio.setProfile(PROFILE_IDLE);
   else if (strcmp(profileName, "listening") == 0) helio.setProfile(PROFILE_LISTENING);
   else if (strcmp(profileName, "speaking") == 0 || strcmp(profileName, "is_speaking") == 0) helio.setProfile(PROFILE_SPEAKING);
   else if (strcmp(profileName, "info") == 0) helio.setProfile(PROFILE_INFO);
   else if (strcmp(profileName, "success") == 0) helio.setProfile(PROFILE_SUCCESS);
   else if (strcmp(profileName, "error") == 0) helio.setProfile(PROFILE_ERROR);
-  else helio.setProfile(PROFILE_SUCCESS); // Default fallback
+  else helio.setProfile(PROFILE_SUCCESS); 
 }
+
 
 // ============================================================================
 // SETUP & LOOP
@@ -620,7 +671,7 @@ void loop() {
       if (serialIndex < SERIAL_BUFFER_SIZE - 1) {
         serialBuffer[serialIndex++] = c;
       } else {
-        serialIndex = 0; // Overflow, reset
+        serialIndex = 0; 
       }
     }
   }
