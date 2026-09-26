@@ -109,7 +109,7 @@ public:
 
 // Global UI state
 Display oled;
-char title[24] = "";
+char title[24] = "WareGV Cutie";
 char subtitle[24] = "";
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
@@ -213,7 +213,7 @@ void setup() {
   oled.begin();
   
   // Default centered view
-  strcpy(title, "READY");
+  strcpy(title, "Starting systems...");
   action = ACTION_SPINNER;
 }
 
