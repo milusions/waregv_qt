@@ -1,679 +1,241 @@
-/*
- * ============================================================================
- * HELIO / EMO-LIGHT — AUTONOMOUS OLED PROFILE CONTROLLER
- * ============================================================================
- *
- * Target:
- *   Arduino Nano / ATmega328P
- *   SSD1306/SH1106 128x64 I2C OLED
- *
- * Libraries:
- *   Wire.h
- *   avr/pgmspace.h
- *
- * I2C:
- *   SDA = A4
- *   SCL = A5
- *   Default address = 0x3C
- *
- * New Serial commands:
- *   {"profile":"idle"}
- *   {"profile":"listening"}
- *   {"profile":"speaking"}
- *   {"profile":"text", "text":"Hello"}
- * 
- * Kinematic Outputs (sent from Arduino to Host):
- *   {"cmd_vel":{"linear":0.0,"angular":0.0}}
- *
- * ============================================================================
- */
-
 #include <Wire.h>
 #include <avr/pgmspace.h>
 #include <string.h>
-#include <stdlib.h>
 
+#define OLED_ADDR       0x3C
+#define OLED_WIDTH      128
+#define OLED_HEIGHT     64
+#define OLED_PAGES      8
+#define OLED_OFFSET     2 // Set to 2 for SH1106, 0 for SSD1306
 
-// ============================================================================
-// DISPLAY CONFIGURATION
-// ============================================================================
-
-#define OLED_I2C_ADDR        0x3C
-#define OLED_WIDTH           128
-#define OLED_HEIGHT          64
-#define OLED_PAGES           8
-#define OLED_BUFFER_SIZE     1024
-
-// Set to 2 if using a 1.3" SH1106 OLED (removes right-side garbage pixels)
-// Set to 0 if using a standard 0.96" SSD1306 OLED
-#define OLED_COL_OFFSET      2 
-
-#define OLED_I2C_CHUNK       16
-#define I2C_RETRIES          3
-
-// Increased buffer to handle longer text payloads
-#define SERIAL_BUFFER_SIZE   128 
-
-
-// ============================================================================
-// ROBOTO FONT (5x7 Compact)
-// ============================================================================
-const uint8_t PROGMEM ROBOTO_5X7[][5] = {
-  {0x00,0x00,0x00,0x00,0x00}, // 32 SPACE
-  {0x00,0x00,0x5F,0x00,0x00}, // !
-  {0x00,0x07,0x00,0x07,0x00}, // "
-  {0x14,0x7F,0x14,0x7F,0x14}, // #
-  {0x24,0x2A,0x7F,0x2A,0x12}, // $
-  {0x23,0x13,0x08,0x64,0x62}, // %
-  {0x36,0x49,0x55,0x22,0x50}, // &
-  {0x00,0x05,0x03,0x00,0x00}, // '
-  {0x00,0x1C,0x22,0x41,0x00}, // (
-  {0x00,0x41,0x22,0x1C,0x00}, // )
-  {0x14,0x08,0x3E,0x08,0x14}, // *
-  {0x08,0x08,0x3E,0x08,0x08}, // +
-  {0x00,0x50,0x30,0x00,0x00}, // ,
-  {0x08,0x08,0x08,0x08,0x08}, // -
-  {0x00,0x60,0x60,0x00,0x00}, // .
-  {0x20,0x10,0x08,0x04,0x02}, // /
-  {0x3E,0x51,0x49,0x45,0x3E}, // 0
-  {0x00,0x42,0x7F,0x40,0x00}, // 1
-  {0x42,0x61,0x51,0x49,0x46}, // 2
-  {0x21,0x41,0x45,0x4B,0x31}, // 3
-  {0x18,0x14,0x12,0x7F,0x10}, // 4
-  {0x27,0x45,0x45,0x45,0x39}, // 5
-  {0x3C,0x4A,0x49,0x49,0x30}, // 6
-  {0x01,0x71,0x09,0x05,0x03}, // 7
-  {0x36,0x49,0x49,0x49,0x36}, // 8
-  {0x06,0x49,0x49,0x29,0x1E}, // 9
-  {0x00,0x36,0x36,0x00,0x00}, // :
-  {0x00,0x56,0x36,0x00,0x00}, // ;
-  {0x08,0x14,0x22,0x41,0x00}, // <
-  {0x14,0x14,0x14,0x14,0x14}, // =
-  {0x00,0x41,0x22,0x14,0x08}, // >
-  {0x02,0x01,0x51,0x09,0x06}, // ?
-  {0x32,0x49,0x79,0x41,0x3E}, // @
-  {0x7E,0x11,0x11,0x11,0x7E}, // A
-  {0x7F,0x49,0x49,0x49,0x36}, // B
-  {0x3E,0x41,0x41,0x41,0x22}, // C
-  {0x7F,0x41,0x41,0x22,0x1C}, // D
-  {0x7F,0x49,0x49,0x49,0x41}, // E
-  {0x7F,0x09,0x09,0x09,0x01}, // F
-  {0x3E,0x41,0x49,0x49,0x7A}, // G
-  {0x7F,0x08,0x08,0x08,0x7F}, // H
-  {0x00,0x41,0x7F,0x41,0x00}, // I
-  {0x20,0x40,0x41,0x3F,0x01}, // J
-  {0x7F,0x08,0x14,0x22,0x41}, // K
-  {0x7F,0x40,0x40,0x40,0x40}, // L
-  {0x7F,0x02,0x0C,0x02,0x7F}, // M
-  {0x7F,0x04,0x08,0x10,0x7F}, // N
-  {0x3E,0x41,0x41,0x41,0x3E}, // O
-  {0x7F,0x09,0x09,0x09,0x06}, // P
-  {0x3E,0x41,0x51,0x21,0x5E}, // Q
-  {0x7F,0x09,0x19,0x29,0x46}, // R
-  {0x46,0x49,0x49,0x49,0x31}, // S
-  {0x01,0x01,0x7F,0x01,0x01}, // T
-  {0x3F,0x40,0x40,0x40,0x3F}, // U
-  {0x1F,0x20,0x40,0x20,0x1F}, // V
-  {0x3F,0x40,0x38,0x40,0x3F}, // W
-  {0x63,0x14,0x08,0x14,0x63}, // X
-  {0x07,0x08,0x70,0x08,0x07}, // Y
-  {0x61,0x51,0x49,0x45,0x43}, // Z
-  {0x00,0x7F,0x41,0x41,0x00}, // [
-  {0x02,0x04,0x08,0x10,0x20}, // \ 
-  {0x00,0x41,0x41,0x7F,0x00}, // ]
-  {0x04,0x02,0x01,0x02,0x04}, // ^
-  {0x40,0x40,0x40,0x40,0x40}  // _
+// 5x7 Font
+const uint8_t PROGMEM FONT[][5] = {
+  {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5F,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},{0x14,0x7F,0x14,0x7F,0x14},
+  {0x24,0x2A,0x7F,0x2A,0x12},{0x23,0x13,0x08,0x64,0x62},{0x36,0x49,0x55,0x22,0x50},{0x00,0x05,0x03,0x00,0x00},
+  {0x00,0x1C,0x22,0x41,0x00},{0x00,0x41,0x22,0x1C,0x00},{0x14,0x08,0x3E,0x08,0x14},{0x08,0x08,0x3E,0x08,0x08},
+  {0x00,0x50,0x30,0x00,0x00},{0x08,0x08,0x08,0x08,0x08},{0x00,0x60,0x60,0x00,0x00},{0x20,0x10,0x08,0x04,0x02},
+  {0x3E,0x51,0x49,0x45,0x3E},{0x00,0x42,0x7F,0x40,0x00},{0x42,0x61,0x51,0x49,0x46},{0x21,0x41,0x45,0x4B,0x31},
+  {0x18,0x14,0x12,0x7F,0x10},{0x27,0x45,0x45,0x45,0x39},{0x3C,0x4A,0x49,0x49,0x30},{0x01,0x71,0x09,0x05,0x03},
+  {0x36,0x49,0x49,0x49,0x36},{0x06,0x49,0x49,0x29,0x1E},{0x00,0x36,0x36,0x00,0x00},{0x00,0x56,0x36,0x00,0x00},
+  {0x08,0x14,0x22,0x41,0x00},{0x14,0x14,0x14,0x14,0x14},{0x00,0x41,0x22,0x14,0x08},{0x02,0x01,0x51,0x09,0x06},
+  {0x32,0x49,0x79,0x41,0x3E},{0x7E,0x11,0x11,0x11,0x7E},{0x7F,0x49,0x49,0x49,0x36},{0x3E,0x41,0x41,0x41,0x22},
+  {0x7F,0x41,0x41,0x22,0x1C},{0x7F,0x49,0x49,0x49,0x41},{0x7F,0x09,0x09,0x09,0x01},{0x3E,0x41,0x49,0x49,0x7A},
+  {0x7F,0x08,0x08,0x08,0x7F},{0x00,0x41,0x7F,0x41,0x00},{0x20,0x40,0x41,0x3F,0x01},{0x7F,0x08,0x14,0x22,0x41},
+  {0x7F,0x40,0x40,0x40,0x40},{0x7F,0x02,0x0C,0x02,0x7F},{0x7F,0x04,0x08,0x10,0x7F},{0x3E,0x41,0x41,0x41,0x3E},
+  {0x7F,0x09,0x09,0x09,0x06},{0x3E,0x41,0x51,0x21,0x5E},{0x7F,0x09,0x19,0x29,0x46},{0x46,0x49,0x49,0x49,0x31},
+  {0x01,0x01,0x7F,0x01,0x01},{0x3F,0x40,0x40,0x40,0x3F},{0x1F,0x20,0x40,0x20,0x1F},{0x3F,0x40,0x38,0x40,0x3F},
+  {0x63,0x14,0x08,0x14,0x63},{0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43},{0x00,0x7F,0x41,0x41,0x00},
+  {0x02,0x04,0x08,0x10,0x20},{0x00,0x41,0x41,0x7F,0x00},{0x04,0x02,0x01,0x02,0x04},{0x40,0x40,0x40,0x40,0x40}
 };
 
-// ============================================================================
-// LOW-LEVEL SSD1306/SH1106 DRIVER
-// ============================================================================
-class SSD1306Nano {
+enum ActionType { ACTION_NONE, ACTION_LOADER, ACTION_SPINNER };
+
+class Display {
 private:
-  uint8_t framebuffer[OLED_BUFFER_SIZE];
-  bool connected;
-  bool inverted;
+  uint8_t buffer[1024];
 
-  bool command(uint8_t c) {
-    for (uint8_t attempt = 0; attempt < I2C_RETRIES; ++attempt) {
-      Wire.beginTransmission(OLED_I2C_ADDR);
-      Wire.write(0x00);
-      Wire.write(c);
-      if (Wire.endTransmission(true) == 0) return true;
-      delayMicroseconds(250);
-    }
-    connected = false;
-    return false;
+  void cmd(uint8_t c) {
+    Wire.beginTransmission(OLED_ADDR);
+    Wire.write(0x00);
+    Wire.write(c);
+    Wire.endTransmission();
   }
 
-  bool command2(uint8_t c, uint8_t v) {
-    for (uint8_t attempt = 0; attempt < I2C_RETRIES; ++attempt) {
-      Wire.beginTransmission(OLED_I2C_ADDR);
-      Wire.write(0x00);
-      Wire.write(c);
-      Wire.write(v);
-      if (Wire.endTransmission(true) == 0) return true;
-      delayMicroseconds(250);
-    }
-    connected = false;
-    return false;
-  }
-
-  bool writeChunk(uint8_t page, uint8_t column, const uint8_t *data, uint8_t count) {
-    if (page >= OLED_PAGES) return false;
-    if (column >= OLED_WIDTH) return false;
-    if (count == 0) return true;
-    if ((uint16_t)column + count > OLED_WIDTH) count = OLED_WIDTH - column;
-
-    for (uint8_t attempt = 0; attempt < I2C_RETRIES; ++attempt) {
-      Wire.beginTransmission(OLED_I2C_ADDR);
-      Wire.write(0x40);
-      for (uint8_t i = 0; i < count; ++i) Wire.write(data[i]);
-      if (Wire.endTransmission(true) == 0) return true;
-      delayMicroseconds(250);
-    }
-    connected = false;
-    return false;
+  void cmd2(uint8_t c, uint8_t v) {
+    Wire.beginTransmission(OLED_ADDR);
+    Wire.write(0x00); Wire.write(c); Wire.write(v);
+    Wire.endTransmission();
   }
 
 public:
-  SSD1306Nano() : connected(false), inverted(false) { clear(); }
-
-  bool isConnected() const { return connected; }
-
   void begin() {
-    connected = false;
     Wire.begin();
     Wire.setClock(400000UL);
-    delay(100);
-    Wire.beginTransmission(OLED_I2C_ADDR);
-    if (Wire.endTransmission(true) != 0) return;
-    connected = true;
-
-    command(0xAE); command2(0xD5, 0x80); command2(0xA8, 0x3F);
-    command2(0xD3, 0x00); command(0x40); command2(0x8D, 0x14);
-    
-    // Page addressing mode (0x02) supports both SSD1306 and SH1106 seamlessly
-    command2(0x20, 0x02); 
-    
-    command(0xA1); command(0xC8);
-    command2(0xDA, 0x12); command2(0x81, 0x8F); command2(0xD9, 0xF1);
-    command2(0xDB, 0x40); command(0xA4); command(0xA6);
-    command(0x2E); command(0xAF);
-
-    inverted = false;
+    cmd(0xAE); cmd2(0xD5, 0x80); cmd2(0xA8, 0x3F); cmd2(0xD3, 0x00);
+    cmd(0x40); cmd2(0x8D, 0x14); cmd2(0x20, 0x02); cmd(0xA1);
+    cmd(0xC8); cmd2(0xDA, 0x12); cmd2(0x81, 0x8F); cmd(0xAF);
     clear();
     display();
   }
 
-  void clear() { memset(framebuffer, 0, sizeof(framebuffer)); }
-  void fillScreen(bool on) { memset(framebuffer, on ? 0xFF : 0x00, sizeof(framebuffer)); }
-  void invert(bool state) { inverted = state; if (connected) command(state ? 0xA7 : 0xA6); }
+  void clear() { memset(buffer, 0, 1024); }
 
-  void pixel(int16_t x, int16_t y, bool on = true) {
-    if (x < 0 || x >= OLED_WIDTH || y < 0 || y >= OLED_HEIGHT) return;
-    uint16_t index = (uint16_t)x + (uint16_t)(y >> 3) * OLED_WIDTH;
-    uint8_t mask = (uint8_t)(1U << (y & 7));
-    if (on) framebuffer[index] |= mask;
-    else framebuffer[index] &= (uint8_t)~mask;
+  void pixel(int16_t x, int16_t y) {
+    if (x >= 0 && x < OLED_WIDTH && y >= 0 && y < OLED_HEIGHT)
+      buffer[x + (y >> 3) * OLED_WIDTH] |= (1 << (y & 7));
   }
 
-  void hline(int16_t x, int16_t y, int16_t w, bool on = true) {
-    for (int16_t i = 0; i < w; ++i) pixel(x + i, y, on);
+  void fillRect(int16_t x, int16_t y, int16_t w, int16_t h) {
+    for (int16_t i = 0; i < w; i++)
+      for (int16_t j = 0; j < h; j++) pixel(x + i, y + j);
   }
 
-  void vline(int16_t x, int16_t y, int16_t h, bool on = true) {
-    for (int16_t i = 0; i < h; ++i) pixel(x, y + i, on);
-  }
-
-  void line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, bool on = true) {
-    int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int16_t dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int16_t err = dx + dy;
-    while (true) {
-      pixel(x0, y0, on);
-      if (x0 == x1 && y0 == y1) break;
-      int16_t e2 = err * 2;
-      if (e2 >= dy) { err += dy; x0 += sx; }
-      if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-  }
-
-  void rect(int16_t x, int16_t y, int16_t w, int16_t h, bool on = true) {
-    hline(x, y, w, on); hline(x, y + h - 1, w, on);
-    vline(x, y, h, on); vline(x + w - 1, y, h, on);
-  }
-
-  void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, bool on = true) {
-    for (int16_t xx = 0; xx < w; ++xx) vline(x + xx, y, h, on);
-  }
-
-  void fillCircle(int16_t cx, int16_t cy, int16_t r, bool on = true) {
-    for (int16_t y = -r; y <= r; ++y) {
-      int16_t dx = (int16_t)sqrt((int32_t)r * r - (int32_t)y * y);
-      hline(cx - dx, cy + y, dx * 2 + 1, on);
-    }
-  }
-
-  void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r, bool on = true) {
-    if (r == 0) { fillRect(x, y, w, h, on); return; }
-    fillRect(x + r, y, w - 2 * r, h, on);
-    for (int16_t yy = 0; yy < r; ++yy) {
-      int16_t dy = r - yy - 1;
-      int16_t dx = (int16_t)sqrt((int32_t)r * r - (int32_t)dy * dy);
-      int16_t left = r - dx;
-      hline(x + left, y + yy, w - 2 * left, on);
-      hline(x + left, y + h - 1 - yy, w - 2 * left, on);
-    }
-    fillRect(x, y + r, r, h - 2 * r, on);
-    fillRect(x + w - r, y + r, r, h - 2 * r, on);
-  }
-
-  void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2, bool on = true) {
-    if (y0 > y1) { int16_t t=y0; y0=y1; y1=t; t=x0; x0=x1; x1=t; }
-    if (y1 > y2) { int16_t t=y1; y1=y2; y2=t; t=x1; x1=x2; x2=t; }
-    if (y0 > y1) { int16_t t=y0; y0=y1; y1=t; t=x0; x0=x1; x1=t; }
-    if (y0 == y2) { hline(min(x0, min(x1, x2)), y0, max(x0, max(x1, x2)) - min(x0, min(x1, x2)) + 1, on); return; }
-    for (int16_t y = y0; y <= y1; ++y) {
-      int32_t xa = x0 + (int32_t)(x1 - x0) * (y - y0) / (y1 - y0);
-      int32_t xb = x0 + (int32_t)(x2 - x0) * (y - y0) / (y2 - y0);
-      if (xa > xb) { int32_t t = xa; xa = xb; xb = t; }
-      hline(xa, y, xb - xa + 1, on);
-    }
-    for (int16_t y = y1 + 1; y <= y2; ++y) {
-      int32_t xa = x1 + (int32_t)(x2 - x1) * (y - y1) / (y2 - y1);
-      int32_t xb = x0 + (int32_t)(x2 - x0) * (y - y0) / (y2 - y0);
-      if (xa > xb) { int32_t t = xa; xa = xb; xb = t; }
-      hline(xa, y, xb - xa + 1, on);
-    }
-  }
-
-  void char5x7(int16_t x, int16_t y, char c, bool on = true, uint8_t scale = 1) {
-    if (c >= 'a' && c <= 'z') c -= ('a' - 'A');
-    if (c < 32 || c > 95) c = ' ';
-    uint8_t index = (uint8_t)c - 32;
-    for (uint8_t col = 0; col < 5; ++col) {
-      uint8_t bits = pgm_read_byte(&ROBOTO_5X7[index][col]);
-      for (uint8_t row = 0; row < 7; ++row) {
-        if (bits & (1U << row)) {
-          if (scale == 1) pixel(x + col, y + row, on);
-          else fillRect(x + col * scale, y + row * scale, scale, scale, on);
+  void drawText(int16_t x, int16_t y, const char *str, uint8_t scale) {
+    while (*str) {
+      char c = *str;
+      if (c >= 'a' && c <= 'z') c -= 32;
+      if (c >= 32 && c <= 95) {
+        uint8_t idx = c - 32;
+        for (uint8_t col = 0; col < 5; col++) {
+          uint8_t b = pgm_read_byte(&FONT[idx][col]);
+          for (uint8_t row = 0; row < 7; row++) {
+            if (b & (1 << row)) {
+              if (scale == 1) pixel(x + col, y + row);
+              else fillRect(x + col * scale, y + row * scale, scale, scale);
+            }
+          }
         }
+      }
+      x += 6 * scale;
+      str++;
+    }
+  }
+
+  void display() {
+    for (uint8_t p = 0; p < OLED_PAGES; p++) {
+      cmd(0xB0 | p);
+      cmd(0x00 | (OLED_OFFSET & 0x0F));
+      cmd(0x10 | (OLED_OFFSET >> 4));
+      uint16_t idx = p * OLED_WIDTH;
+      for (uint8_t c = 0; c < OLED_WIDTH; c += 16) {
+        Wire.beginTransmission(OLED_ADDR);
+        Wire.write(0x40);
+        for (uint8_t i = 0; i < 16; i++) Wire.write(buffer[idx + c + i]);
+        Wire.endTransmission();
       }
     }
   }
-
-  uint16_t textWidth(const char *text, uint8_t scale = 1) const {
-    if (!text) return 0;
-    uint16_t len = strlen(text);
-    if (len == 0) return 0;
-    return (uint16_t)(len * 6UL * scale - scale);
-  }
-
-  void text(int16_t x, int16_t y, const char *str, bool on = true, uint8_t scale = 1) {
-    while (*str) { char5x7(x, y, *str, on, scale); x += 6 * scale; ++str; }
-  }
-
-  void centeredText(int16_t y, const char *str, bool on = true, uint8_t scale = 1) {
-    if (!str) return;
-    uint16_t width = textWidth(str, scale);
-    int16_t x = (OLED_WIDTH - width) / 2;
-    if (x < 0) x = 0;
-    text(x, y, str, on, scale);
-  }
-
-  bool display() {
-    if (!connected) return false;
-    for (uint8_t page = 0; page < OLED_PAGES; ++page) {
-      if (!command(0xB0 | page)) return false;
-      
-      // Apply the column offset to push garbage out of view on SH1106 displays
-      if (!command(0x00 | (OLED_COL_OFFSET & 0x0F))) return false;
-      if (!command(0x10 | (OLED_COL_OFFSET >> 4))) return false;
-      
-      uint16_t base = (uint16_t)page * OLED_WIDTH;
-      for (uint8_t column = 0; column < OLED_WIDTH; column += OLED_I2C_CHUNK) {
-        if (!writeChunk(page, column, &framebuffer[base + column], OLED_I2C_CHUNK)) return false;
-      }
-    }
-    return true;
-  }
 };
 
+// Global UI state
+Display oled;
+char title[24] = "";
+char subtitle[24] = "";
+ActionType action = ACTION_NONE;
+uint8_t animStep = 0;
+unsigned long lastAnim = 0;
+char rxBuffer[64];
+uint8_t rxIdx = 0;
 
-// ============================================================================
-// PROFILE & STATE ENUMERATION
-// ============================================================================
-enum Profile {
-  PROFILE_BOOTING = 0,
-  PROFILE_IDLE,
-  PROFILE_LISTENING,
-  PROFILE_SPEAKING,
-  PROFILE_TEXT,
-  PROFILE_INFO,
-  PROFILE_SUCCESS,
-  PROFILE_ERROR,
-  PROFILE_GOAL_RECEIVED,
-  PROFILE_NAVIGATED
-};
-
-enum IdleSubState {
-  IDLE_NORMAL = 0,
-  IDLE_THINK,
-  IDLE_READ,
-  IDLE_PAINT,
-  IDLE_SHOOT
-};
-
-// ============================================================================
-// PROFILE MANAGER & ANIMATION ENGINE
-// ============================================================================
-class HelioUI {
-private:
-  SSD1306Nano &oled;
-  Profile profile;
-  IdleSubState idleState;
-  uint8_t frame;
-  unsigned long lastFrame;
-  unsigned long lastSubStateChange; 
-  
-  char customText[32]; // Buffer to store text payloads
-
-  // Sends kinematic velocity commands to the host (e.g. ROS / rover base)
-  void sendVel(float lin, float ang) {
-    if (lin > 0.07) lin = 0.07;
-    if (lin < -0.07) lin = -0.07;
-    if (ang > 0.2) ang = 0.2;
-    if (ang < -0.2) ang = -0.2;
-
-    Serial.print(F("{\"cmd_vel\":{\"linear\":"));
-    Serial.print(lin, 2);
-    Serial.print(F(",\"angular\":"));
-    Serial.print(ang, 2);
-    Serial.println(F("}}"));
-  }
-
-  // Draw expressive rounded eyes (Emo style)
-  void drawEmoEyes(int16_t xOffset, int16_t yOffset, uint8_t style = 0) {
-    int16_t lx = 28 + xOffset, rx = 76 + xOffset;
-    int16_t y = 16 + yOffset;
-    int16_t w = 24, h = 32;
-
-    if (style == 1) { // Happy (Bottom cut)
-      oled.fillRoundRect(lx, y, w, h, 8, true);
-      oled.fillRoundRect(rx, y, w, h, 8, true);
-      oled.fillRect(lx, y + h - 10, w, 10, false);
-      oled.fillRect(rx, y + h - 10, w, 10, false);
-    } else if (style == 2) { // Squint / Shoot
-      oled.fillRoundRect(lx, y + 10, w, h - 10, 4, true);
-      oled.fillRoundRect(rx, y + 10, w, h - 10, 4, true);
-      oled.fillTriangle(lx, y+10, lx+10, y+10, lx, y+20, false); 
-      oled.fillTriangle(rx+w, y+10, rx+w-10, y+10, rx+w, y+20, false);
-    } else if (style == 3) { // Blinking
-      oled.fillRect(lx, y + 14, w, 4, true);
-      oled.fillRect(rx, y + 14, w, 4, true);
-    } else { // Normal
-      oled.fillRoundRect(lx, y, w, h, 10, true);
-      oled.fillRoundRect(rx, y, w, h, 10, true);
-    }
-  }
-
-  // Animated Hand
-  void drawHand(int16_t x, int16_t y, bool wave) {
-    int16_t yo = wave ? (frame % 2 == 0 ? -3 : 3) : 0;
-    oled.fillRoundRect(x, y + yo, 18, 16, 4, true);
-    oled.fillRect(x + 2, y - 4 + yo, 4, 6, true);
-    oled.fillRect(x + 8, y - 5 + yo, 4, 7, true);
-    oled.fillRect(x + 14, y - 3 + yo, 3, 5, true);
-  }
-
-  // --------------------------------------------------------------------------
-  // PROFILE RENDERERS
-  // --------------------------------------------------------------------------
-  void renderBooting() {
-    oled.clear();
-    oled.centeredText(28, "HELIO", true, 2);
-    oled.fillRect(14, 48, (frame * 10) % 100, 4, true);
-    oled.display();
-  }
-
-  void renderListening() {
-    oled.clear();
-    int16_t yOffset = (frame % 4 < 2) ? 1 : 0;
-    drawEmoEyes(0, yOffset, 0);
-    uint8_t active = frame % 3;
-    for (uint8_t i = 0; i < 3; ++i) oled.fillCircle(56 + i * 8, 56, (i == active) ? 3 : 1, true);
-    oled.display();
-  }
-
-  void renderSpeaking() {
-    oled.clear();
-    int16_t yOffset = (frame % 2 == 0) ? -2 : 2;
-    drawEmoEyes(0, yOffset, (frame % 8 == 0) ? 3 : 0);
-    drawHand(105, 40, true);
-    oled.display();
-  }
-
-  void renderTextDisplay() {
-    oled.clear();
-    // Use scale 2 if it's short, or scale 1 if it's a long message
-    uint8_t scale = (strlen(customText) <= 10) ? 2 : 1;
-    oled.centeredText(32 - (7 * scale) / 2, customText, true, scale);
-    oled.display();
-  }
-
-  void renderIdle() {
-    oled.clear();
-    
-    // Only switch sub-states every 4 seconds to stop glitching/rapid flashing
-    unsigned long now = millis();
-    if (now - lastSubStateChange > 4000) {
-      idleState = (IdleSubState)(random(0, 5));
-      lastSubStateChange = now;
-      frame = 0; // Reset frame animation cycle for the new sub-state
-    }
-
-    int16_t xOff = 0, yOff = 0;
-    uint8_t style = (frame % 20 == 19) ? 3 : 0; // Occasional blink
-
-    switch(idleState) {
-      case IDLE_NORMAL:
-        xOff = (frame > 5) ? 6 : -6;
-        drawEmoEyes(xOff, 0, style);
-        break;
-
-      case IDLE_THINK:
-        yOff = -6; xOff = 6;
-        drawEmoEyes(xOff, yOff, 0);
-        oled.fillRoundRect(8, 4, 30, 20, 4, true);
-        oled.fillTriangle(28, 24, 38, 24, 34, 30, true);
-        oled.fillCircle(14, 14, 1, false);
-        oled.fillCircle(23, 14, 1, false);
-        oled.fillCircle(32, 14, 1, false);
-        break;
-
-      case IDLE_READ:
-        yOff = 6;
-        drawEmoEyes(0, yOff, style);
-        oled.fillRoundRect(48, 50, 15, 10, 2, true);
-        oled.fillRoundRect(65, 50, 15, 10, 2, true);
-        oled.fillRect(50, 52, 11, 1, false);
-        oled.fillRect(50, 55, 11, 1, false);
-        oled.fillRect(67, 52, 11, 1, false);
-        oled.fillRect(67, 55, 11, 1, false);
-        break;
-
-      case IDLE_PAINT:
-        xOff = (frame % 8 < 4) ? -4 : 4;
-        drawEmoEyes(xOff, 0, style);
-        oled.rect(8, 30, 20, 26, true);
-        oled.fillRect(10, 32, 16, 22, true);
-        oled.line(28, 56, 38, 40, true);
-        oled.fillCircle(38, 40, 2, true);
-        if (frame == 3) sendVel(0.0, 0.2);
-        else if (frame == 6) sendVel(0.0, -0.2);
-        else sendVel(0.0, 0.0);
-        break;
-
-      case IDLE_SHOOT:
-        drawEmoEyes(0, 0, 2);
-        oled.fillRect(12, 38, 20, 6, true);
-        oled.fillRect(12, 44, 6, 10, true);
-        if (frame % 4 == 0) {
-          oled.fillCircle(36, 41, 4, true);
-          sendVel(-0.07, 0.0);
-        } else {
-          sendVel(0.0, 0.0);
-        }
-        break;
-    }
-    oled.display();
-  }
-
-public:
-  HelioUI(SSD1306Nano &display) : oled(display), profile(PROFILE_BOOTING), frame(0), lastFrame(0), lastSubStateChange(0) {
-    customText[0] = '\0';
-    randomSeed(analogRead(0));
-  }
-
-  void setText(const char* t) {
-    strncpy(customText, t, 31);
-    customText[31] = '\0';
-  }
-
-  void setProfile(Profile p) {
-    profile = p;
-    frame = 0;
-    lastFrame = millis();
-    lastSubStateChange = millis();
-    oled.invert(false);
-    render();
-  }
-
-  void render() {
-    switch (profile) {
-      case PROFILE_BOOTING: renderBooting(); break;
-      case PROFILE_IDLE: renderIdle(); break;
-      case PROFILE_LISTENING: renderListening(); break;
-      case PROFILE_SPEAKING: renderSpeaking(); break;
-      case PROFILE_TEXT: renderTextDisplay(); break;
-      default: 
-        oled.clear();
-        oled.centeredText(28, "SYSTEM OK", true, 2);
-        oled.display();
-        break;
-    }
-  }
-
-  void update() {
-    unsigned long now = millis();
-    uint16_t interval = 300; 
-
-    if (profile == PROFILE_BOOTING) interval = 100;
-    else if (profile == PROFILE_SPEAKING) interval = 150;
-    else if (profile == PROFILE_IDLE) interval = 350;
-    else if (profile == PROFILE_TEXT) interval = 1000; // Text is static, low refresh needed
-
-    if (now - lastFrame >= interval) {
-      lastFrame = now;
-      ++frame;
-      render();
-    }
-  }
-};
-
-
-// ============================================================================
-// GLOBALS & SERIAL PARSER
-// ============================================================================
-SSD1306Nano oled;
-HelioUI helio(oled);
-
-char serialBuffer[SERIAL_BUFFER_SIZE];
-uint8_t serialIndex = 0;
-
-void parseCommand(const char *json) {
-  if (!json || !json[0]) return;
-
-  const char *key = strstr(json, "\"profile\"");
-  if (!key) key = strstr(json, "profile");
-  if (!key) return;
-
-  const char *colon = strchr(key, ':');
-  if (!colon) return;
-
-  const char *value = colon + 1;
-  while (*value == ' ' || *value == '\t' || *value == '"' || *value == '\'') ++value;
-
-  char profileName[32];
+void extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
+  out[0] = '\0';
+  const char *p = strstr(json, key);
+  if (!p) return;
+  p = strchr(p, ':');
+  if (!p) return;
+  p++;
+  while (*p == ' ' || *p == '"') p++;
   uint8_t i = 0;
-  while (value[i] && value[i] != '"' && value[i] != '\'' && value[i] != ',' && value[i] != '}' && i < 31) {
-    profileName[i] = value[i];
-    ++i;
+  while (*p && *p != '"' && *p != ',' && *p != '}' && i < maxLen - 1) {
+    out[i++] = *p++;
   }
-  profileName[i] = '\0';
-
-  // 1. Intercept "text" profile to parse the secondary value
-  if (strcmp(profileName, "text") == 0) {
-    const char *textKey = strstr(json, "\"text\"");
-    if (textKey) {
-      const char *tColon = strchr(textKey, ':');
-      if (tColon) {
-        const char *tVal = tColon + 1;
-        while (*tVal == ' ' || *tVal == '\t' || *tVal == '"' || *tVal == '\'') ++tVal;
-        
-        char msg[32];
-        uint8_t j = 0;
-        // Keep parsing until the closing quote/brace
-        while (tVal[j] && tVal[j] != '"' && tVal[j] != '\'' && tVal[j] != '}' && j < 31) {
-          msg[j] = tVal[j];
-          ++j;
-        }
-        msg[j] = '\0';
-        helio.setText(msg);
-      }
-    }
-    helio.setProfile(PROFILE_TEXT);
-  } 
-  // 2. Map standard profiles
-  else if (strcmp(profileName, "booting") == 0) helio.setProfile(PROFILE_BOOTING);
-  else if (strcmp(profileName, "idle") == 0) helio.setProfile(PROFILE_IDLE);
-  else if (strcmp(profileName, "listening") == 0) helio.setProfile(PROFILE_LISTENING);
-  else if (strcmp(profileName, "speaking") == 0 || strcmp(profileName, "is_speaking") == 0) helio.setProfile(PROFILE_SPEAKING);
-  else if (strcmp(profileName, "info") == 0) helio.setProfile(PROFILE_INFO);
-  else if (strcmp(profileName, "success") == 0) helio.setProfile(PROFILE_SUCCESS);
-  else if (strcmp(profileName, "error") == 0) helio.setProfile(PROFILE_ERROR);
-  else helio.setProfile(PROFILE_SUCCESS); 
+  out[i] = '\0';
 }
 
+void parseJson(const char *json) {
+  extractJsonVal(json, "title", title, sizeof(title));
+  extractJsonVal(json, "subtitle", subtitle, sizeof(subtitle));
+  
+  char act[16];
+  extractJsonVal(json, "action", act, sizeof(act));
+  if (strcmp(act, "loader") == 0 || strcmp(act, "bar") == 0) action = ACTION_LOADER;
+  else if (strcmp(act, "spinner") == 0) action = ACTION_SPINNER;
+  else action = ACTION_NONE;
+}
 
-// ============================================================================
-// SETUP & LOOP
-// ============================================================================
+void renderUI() {
+  oled.clear();
+
+  bool hasTitle = title[0] != '\0';
+  bool hasSub = subtitle[0] != '\0';
+  bool hasAction = (action != ACTION_NONE);
+
+  // Height definitions: Title (14px), Subtitle (7px), Action (8px)
+  uint8_t hTitle = hasTitle ? 14 : 0;
+  uint8_t hSub = hasSub ? 7 : 0;
+  uint8_t hAct = hasAction ? 8 : 0;
+
+  uint8_t count = (hasTitle ? 1 : 0) + (hasSub ? 1 : 0) + (hasAction ? 1 : 0);
+  uint8_t spacing = (count > 1) ? 6 : 0;
+  
+  uint8_t totalHeight = hTitle + hSub + hAct + ((count > 1) ? (count - 1) * spacing : 0);
+  int16_t currentY = (OLED_HEIGHT - totalHeight) / 2;
+
+  // Render Title (Scale 2)
+  if (hasTitle) {
+    int16_t x = (OLED_WIDTH - (strlen(title) * 12 - 2)) / 2;
+    oled.drawText(x < 0 ? 0 : x, currentY, title, 2);
+    currentY += hTitle + spacing;
+  }
+
+  // Render Subtitle (Scale 1)
+  if (hasSub) {
+    int16_t x = (OLED_WIDTH - (strlen(subtitle) * 6 - 1)) / 2;
+    oled.drawText(x < 0 ? 0 : x, currentY, subtitle, 1);
+    currentY += hSub + spacing;
+  }
+
+  // Render Action Graphic
+  if (hasAction) {
+    if (action == ACTION_LOADER) {
+      int16_t barW = 60, barH = 6;
+      int16_t barX = (OLED_WIDTH - barW) / 2;
+      for (int i = 0; i < barW; i++) {
+        oled.pixel(barX + i, currentY);
+        oled.pixel(barX + i, currentY + barH - 1);
+      }
+      for (int i = 0; i < barH; i++) {
+        oled.pixel(barX, currentY + i);
+        oled.pixel(barX + barW - 1, currentY + i);
+      }
+      uint8_t fillW = (animStep % 10) * (barW - 4) / 9;
+      oled.fillRect(barX + 2, currentY + 2, fillW, barH - 4);
+    } 
+    else if (action == ACTION_SPINNER) {
+      int16_t cx = OLED_WIDTH / 2;
+      int16_t cy = currentY + 4;
+      const int8_t dots[4][2] = {{0, -3}, {3, 0}, {0, 3}, {-3, 0}};
+      for (uint8_t i = 0; i < 4; i++) {
+        if (i == (animStep % 4)) {
+          oled.fillRect(cx + dots[i][0] - 1, cy + dots[i][1] - 1, 3, 3);
+        } else {
+          oled.pixel(cx + dots[i][0], cy + dots[i][1]);
+        }
+      }
+    }
+  }
+
+  oled.display();
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(100);
-  
   oled.begin();
-  helio.setProfile(PROFILE_BOOTING);
+  
+  // Default centered view
+  strcpy(title, "READY");
+  action = ACTION_SPINNER;
 }
 
 void loop() {
-  while (Serial.available() > 0) {
-    char c = (char)Serial.read();
+  // Read Serial JSON Input
+  while (Serial.available()) {
+    char c = Serial.read();
     if (c == '\n' || c == '\r') {
-      if (serialIndex > 0) {
-        serialBuffer[serialIndex] = '\0';
-        parseCommand(serialBuffer);
-        serialIndex = 0;
+      if (rxIdx > 0) {
+        rxBuffer[rxIdx] = '\0';
+        parseJson(rxBuffer);
+        rxIdx = 0;
       }
-    } else {
-      if (serialIndex < SERIAL_BUFFER_SIZE - 1) {
-        serialBuffer[serialIndex++] = c;
-      } else {
-        serialIndex = 0; 
-      }
+    } else if (rxIdx < sizeof(rxBuffer) - 1) {
+      rxBuffer[rxIdx++] = c;
     }
   }
-  helio.update();
+
+  // Animate at ~10 FPS
+  if (millis() - lastAnim > 100) {
+    lastAnim = millis();
+    animStep++;
+    renderUI();
+  }
 }
