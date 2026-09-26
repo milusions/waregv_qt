@@ -213,7 +213,7 @@ void setup() {
   oled.begin();
   
   // Default centered view
-  strcpy(title, "WareGV Cutie");
+  strcpy(title, "WareGV");
   action = ACTION_SPINNER;
 }
 
