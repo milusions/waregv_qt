@@ -109,23 +109,27 @@ public:
 
 // Global UI state
 Display oled;
+char currentIp[24] = "Waiting for IP...";
 char title[24] = "";
 char subtitle[24] = "";
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
-char rxBuffer[64];
+char rxBuffer[128]; // Increased buffer to fit larger JSONs
 uint8_t rxIdx = 0;
 
 void extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
-  out[0] = '\0';
   const char *p = strstr(json, key);
-  if (!p) return;
+  if (!p) return; // If key is missing, KEEP the old data. Do not wipe it out!
+  
   p = strchr(p, ':');
   if (!p) return;
   p++;
+  
   while (*p == ' ' || *p == '"') p++;
+  
   uint8_t i = 0;
+  out[0] = '\0'; // Only clear out the variable once we are sure the key is present
   while (*p && *p != '"' && *p != ',' && *p != '}' && i < maxLen - 1) {
     out[i++] = *p++;
   }
@@ -133,24 +137,41 @@ void extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen
 }
 
 void parseJson(const char *json) {
+  extractJsonVal(json, "ip", currentIp, sizeof(currentIp));
   extractJsonVal(json, "title", title, sizeof(title));
   extractJsonVal(json, "subtitle", subtitle, sizeof(subtitle));
   
-  char act[16];
+  char act[16] = "";
   extractJsonVal(json, "action", act, sizeof(act));
-  if (strcmp(act, "loader") == 0 || strcmp(act, "bar") == 0) action = ACTION_LOADER;
-  else if (strcmp(act, "spinner") == 0) action = ACTION_SPINNER;
-  else action = ACTION_NONE;
+  
+  // Only change the action state if the JSON actually sent one
+  if (act[0] != '\0') {
+    if (strcmp(act, "loader") == 0 || strcmp(act, "bar") == 0) action = ACTION_LOADER;
+    else if (strcmp(act, "spinner") == 0) action = ACTION_SPINNER;
+    else action = ACTION_NONE;
+  }
 }
 
 void renderUI() {
   oled.clear();
 
+  // ----- 1. RENDER IP ADDRESS AT TOP -----
+  // Center the IP address horizontally at Y = 0
+  int16_t ipX = (OLED_WIDTH - (strlen(currentIp) * 6 - 1)) / 2;
+  oled.drawText(ipX < 0 ? 0 : ipX, 0, currentIp, 1);
+  
+  // Draw a subtle dashed line to separate IP from the main UI (Y = 9)
+  for (int i = 0; i < OLED_WIDTH; i += 4) {
+    oled.pixel(i, 9);
+    oled.pixel(i + 1, 9);
+  }
+
+  // ----- 2. RENDER MAIN DYNAMIC UI BELOW -----
   bool hasTitle = title[0] != '\0';
   bool hasSub = subtitle[0] != '\0';
   bool hasAction = (action != ACTION_NONE);
 
-  // Height definitions: Title (14px), Subtitle (7px), Action (8px)
+  // Height definitions
   uint8_t hTitle = hasTitle ? 14 : 0;
   uint8_t hSub = hasSub ? 7 : 0;
   uint8_t hAct = hasAction ? 8 : 0;
@@ -159,7 +180,13 @@ void renderUI() {
   uint8_t spacing = (count > 1) ? 6 : 0;
   
   uint8_t totalHeight = hTitle + hSub + hAct + ((count > 1) ? (count - 1) * spacing : 0);
-  int16_t currentY = (OLED_HEIGHT - totalHeight) / 2;
+  
+  // We restrict the drawing area to below Y=12 so it doesn't overlap the IP.
+  int16_t startY = 12; 
+  int16_t availH = OLED_HEIGHT - startY;
+  
+  // Dynamically center everything within the lower screen area
+  int16_t currentY = startY + (availH - totalHeight) / 2;
 
   // Render Title (Scale 2)
   if (hasTitle) {
