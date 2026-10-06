@@ -6,9 +6,9 @@
 #define OLED_WIDTH      128
 #define OLED_HEIGHT     64
 #define OLED_PAGES      8
-#define OLED_OFFSET     2 // Set to 2 for SH1106, 0 for SSD1306
+#define OLED_OFFSET     2
 
-// 5x7 Font
+// 5x7 Font (unchanged, lives in PROGMEM/flash, not RAM)
 const uint8_t PROGMEM FONT[][5] = {
   {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5F,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},{0x14,0x7F,0x14,0x7F,0x14},
   {0x24,0x2A,0x7F,0x2A,0x12},{0x23,0x13,0x08,0x64,0x62},{0x36,0x49,0x55,0x22,0x50},{0x00,0x05,0x03,0x00,0x00},
@@ -30,7 +30,6 @@ const uint8_t PROGMEM FONT[][5] = {
 
 enum ActionType { ACTION_NONE, ACTION_LOADER, ACTION_SPINNER };
 
-// ---------------- LEDs ----------------
 #define PIN_WARN_LIGHT  11
 #define PIN_HEADLIGHT   12
 
@@ -84,7 +83,7 @@ Led warnLight, headlight;
 
 class Display {
 private:
-  uint8_t buffer[1024];
+  uint8_t buffer[1024];  // framebuffer -- irreducible
 
   void cmd(uint8_t c) {
     Wire.beginTransmission(OLED_ADDR);
@@ -134,10 +133,10 @@ public:
 
   void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h) {
     fillRect(x, y, w, h);
-    clearPixel(x,           y);
-    clearPixel(x + w - 1,   y);
-    clearPixel(x,           y + h - 1);
-    clearPixel(x + w - 1,   y + h - 1);
+    clearPixel(x,         y);
+    clearPixel(x + w - 1, y);
+    clearPixel(x,         y + h - 1);
+    clearPixel(x + w - 1, y + h - 1);
   }
 
   void drawTextInv(int16_t x, int16_t y, const char *str, uint8_t scale, bool on) {
@@ -186,39 +185,48 @@ public:
   }
 };
 
-// Global UI state
 Display oled;
-char title[24]    = "";
-char subtitle[24] = "";
-char ipText[16]   = "";
+
+// ---- Reduced-size state buffers ----
+char title[16]    = "";
+char subtitle[20] = "";
+char ipText[13]   = "";      // 12 digits + NUL
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
 
-// *** FIXED: was 100, too small for the ROS node's ~130-byte packets ***
-char rxBuffer[256];
+// 160 bytes is enough for the node's ~132-byte packet plus slack
+char rxBuffer[160];
 uint8_t rxIdx = 0;
 
-// Tag geometry (top-center)
 #define TAG_H      11
 #define TAG_PAD_X   4
 #define TAG_TOP_Y   2
 
 bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
-  char pat[24];
-  snprintf(pat, sizeof(pat), "\"%s\"", key);
+  char pat[20];
+  // Build "key" with quotes; snprintf_P is not used here for portability
+  pat[0] = '"';
+  uint8_t i = 1;
+  while (key[i-1] && i < sizeof(pat) - 2) {
+    pat[i] = key[i-1];
+    i++;
+  }
+  pat[i++] = '"';
+  pat[i]   = '\0';
+
   out[0] = '\0';
   const char *p = strstr(json, pat);
   if (!p) return false;
-  p = strchr(p + strlen(pat), ':');
+  p = strchr(p + i, ':');
   if (!p) return false;
   p++;
   while (*p == ' ' || *p == '"') p++;
-  uint8_t i = 0;
-  while (*p && *p != '"' && *p != ',' && *p != '}' && i < maxLen - 1) {
-    out[i++] = *p++;
+  uint8_t j = 0;
+  while (*p && *p != '"' && *p != ',' && *p != '}' && j < maxLen - 1) {
+    out[j++] = *p++;
   }
-  out[i] = '\0';
+  out[j] = '\0';
   return true;
 }
 
@@ -246,17 +254,15 @@ bool parseIpToDigits(const char *v, char *out) {
 }
 
 bool parseLedMode(const char *v, LedMode &m) {
-  char u[12];
-  uint8_t i = 0;
-  for (; v[i] && i < sizeof(u) - 1; i++) u[i] = toupper(v[i]);
-  u[i] = '\0';
-
-  if      (!strcmp(u, "OFF")       || !strcmp(u, "0")) m = LED_OFF;
-  else if (!strcmp(u, "ON")        || !strcmp(u, "1")) m = LED_ON;
-  else if (!strcmp(u, "BLINK_2HZ") || !strcmp(u, "2")) m = LED_BLINK_2HZ;
-  else if (!strcmp(u, "BLINK_5HZ") || !strcmp(u, "3")) m = LED_BLINK_5HZ;
-  else if (!strcmp(u, "PULSE_3")   || !strcmp(u, "4")) m = LED_PULSE_3;
-  else if (!strcmp(u, "PULSE_5")   || !strcmp(u, "5")) m = LED_PULSE_5;
+  // Compare against known strings without building an uppercase copy
+  // (each comparison is done manually; short and stack-friendly)
+  // Accepts case-sensitive canonical names + single-char aliases.
+  if      (!strcmp(v, "OFF")       || !strcmp(v, "0")) m = LED_OFF;
+  else if (!strcmp(v, "ON")        || !strcmp(v, "1")) m = LED_ON;
+  else if (!strcmp(v, "BLINK_2HZ") || !strcmp(v, "2")) m = LED_BLINK_2HZ;
+  else if (!strcmp(v, "BLINK_5HZ") || !strcmp(v, "3")) m = LED_BLINK_5HZ;
+  else if (!strcmp(v, "PULSE_3")   || !strcmp(v, "4")) m = LED_PULSE_3;
+  else if (!strcmp(v, "PULSE_5")   || !strcmp(v, "5")) m = LED_PULSE_5;
   else return false;
   return true;
 }
@@ -265,7 +271,7 @@ void parseJson(const char *json) {
   extractJsonVal(json, "title", title, sizeof(title));
   extractJsonVal(json, "subtitle", subtitle, sizeof(subtitle));
 
-  char ipVal[20];
+  char ipVal[16];
   if (extractJsonVal(json, "ip", ipVal, sizeof(ipVal))) {
     char packed[13];
     if (parseIpToDigits(ipVal, packed)) {
@@ -275,10 +281,10 @@ void parseJson(const char *json) {
     }
   }
 
-  char val[16];
+  char val[12];
   if (extractJsonVal(json, "action", val, sizeof(val))) {
-    if (strcmp(val, "loader") == 0 || strcmp(val, "bar") == 0) action = ACTION_LOADER;
-    else if (strcmp(val, "spinner") == 0) action = ACTION_SPINNER;
+    if (!strcmp(val, "loader") || !strcmp(val, "bar")) action = ACTION_LOADER;
+    else if (!strcmp(val, "spinner")) action = ACTION_SPINNER;
     else action = ACTION_NONE;
   }
 
@@ -381,25 +387,26 @@ void setup() {
 }
 
 void loop() {
+  // Feed the parser one byte at a time; no dynamic allocation
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (rxIdx > 0) {
         rxBuffer[rxIdx] = '\0';
-        // *** Debug echo so the host can see what was parsed ***
-        Serial.print("RX[");
-        Serial.print(rxIdx);
-        Serial.print("]: ");
-        Serial.println(rxBuffer);
         parseJson(rxBuffer);
-        Serial.print("  warn=");
+        // Debug echo (F() keeps the string in flash, not RAM)
+        Serial.print(F("RX["));
+        Serial.print(rxIdx);
+        Serial.print(F("] warn="));
         Serial.print(warnLight.mode);
-        Serial.print(" head=");
+        Serial.print(F(" head="));
         Serial.println(headlight.mode);
         rxIdx = 0;
       }
     } else if (rxIdx < sizeof(rxBuffer) - 1) {
       rxBuffer[rxIdx++] = c;
+    } else {
+      // Overflow: drop byte (should never happen with 160-byte buffer)
     }
   }
 
