@@ -30,6 +30,58 @@ const uint8_t PROGMEM FONT[][5] = {
 
 enum ActionType { ACTION_NONE, ACTION_LOADER, ACTION_SPINNER };
 
+// ---------------- LEDs ----------------
+#define PIN_WARN_LIGHT  11
+#define PIN_HEADLIGHT   12
+
+enum LedMode : uint8_t {
+  LED_OFF, LED_ON, LED_BLINK_2HZ, LED_BLINK_5HZ, LED_PULSE_3, LED_PULSE_5
+};
+
+#define PULSE_ON_MS     100   // one flash: on time
+#define PULSE_OFF_MS    100   // one flash: off time
+#define PULSE_PAUSE_MS  1000  // pause between bursts
+
+struct Led {
+  uint8_t pin;
+  LedMode mode;
+  unsigned long modeStart;
+
+  void begin(uint8_t p) {
+    pin = p;
+    pinMode(pin, OUTPUT);
+    setMode(LED_OFF);
+  }
+
+  void setMode(LedMode m) {
+    mode = m;
+    modeStart = millis();   // restart pattern phase on every change
+  }
+
+  void update() {
+    unsigned long t = millis() - modeStart;
+    bool on = false;
+    switch (mode) {
+      case LED_OFF:       on = false; break;
+      case LED_ON:        on = true;  break;
+      case LED_BLINK_2HZ: on = (t % 500) < 250; break;   // 500 ms period
+      case LED_BLINK_5HZ: on = (t % 200) < 100; break;   // 200 ms period
+      case LED_PULSE_3:
+      case LED_PULSE_5: {
+        uint8_t n = (mode == LED_PULSE_3) ? 3 : 5;
+        const unsigned long flash = PULSE_ON_MS + PULSE_OFF_MS;
+        unsigned long period = n * flash + PULSE_PAUSE_MS;
+        unsigned long pt = t % period;
+        on = (pt < n * flash) && ((pt % flash) < PULSE_ON_MS);
+        break;
+      }
+    }
+    digitalWrite(pin, on ? HIGH : LOW);
+  }
+};
+
+Led warnLight, headlight;
+
 class Display {
 private:
   uint8_t buffer[1024];
@@ -114,15 +166,19 @@ char subtitle[24] = "";
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
-char rxBuffer[64];
+char rxBuffer[100];
 uint8_t rxIdx = 0;
 
-void extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
+// Finds "key" (with quotes, so "title" can't match inside "subtitle").
+// Returns true if the key was present.
+bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
+  char pat[24];
+  snprintf(pat, sizeof(pat), "\"%s\"", key);
   out[0] = '\0';
-  const char *p = strstr(json, key);
-  if (!p) return;
-  p = strchr(p, ':');
-  if (!p) return;
+  const char *p = strstr(json, pat);
+  if (!p) return false;
+  p = strchr(p + strlen(pat), ':');
+  if (!p) return false;
   p++;
   while (*p == ' ' || *p == '"') p++;
   uint8_t i = 0;
@@ -130,17 +186,44 @@ void extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen
     out[i++] = *p++;
   }
   out[i] = '\0';
+  return true;
 }
 
+// Accepts "OFF","ON","BLINK_2HZ","BLINK_5HZ","PULSE_3","PULSE_5"
+// (case-insensitive) or the numbers 0..5. Returns false if unknown.
+bool parseLedMode(const char *v, LedMode &m) {
+  char u[12];
+  uint8_t i = 0;
+  for (; v[i] && i < sizeof(u) - 1; i++) u[i] = toupper(v[i]);
+  u[i] = '\0';
+
+  if      (!strcmp(u, "OFF")       || !strcmp(u, "0")) m = LED_OFF;
+  else if (!strcmp(u, "ON")        || !strcmp(u, "1")) m = LED_ON;
+  else if (!strcmp(u, "BLINK_2HZ") || !strcmp(u, "2")) m = LED_BLINK_2HZ;
+  else if (!strcmp(u, "BLINK_5HZ") || !strcmp(u, "3")) m = LED_BLINK_5HZ;
+  else if (!strcmp(u, "PULSE_3")   || !strcmp(u, "4")) m = LED_PULSE_3;
+  else if (!strcmp(u, "PULSE_5")   || !strcmp(u, "5")) m = LED_PULSE_5;
+  else return false;
+  return true;
+}
+
+// Every key is optional: only keys present in the message are changed.
 void parseJson(const char *json) {
   extractJsonVal(json, "title", title, sizeof(title));
   extractJsonVal(json, "subtitle", subtitle, sizeof(subtitle));
-  
-  char act[16];
-  extractJsonVal(json, "action", act, sizeof(act));
-  if (strcmp(act, "loader") == 0 || strcmp(act, "bar") == 0) action = ACTION_LOADER;
-  else if (strcmp(act, "spinner") == 0) action = ACTION_SPINNER;
-  else action = ACTION_NONE;
+
+  char val[16];
+  if (extractJsonVal(json, "action", val, sizeof(val))) {
+    if (strcmp(val, "loader") == 0 || strcmp(val, "bar") == 0) action = ACTION_LOADER;
+    else if (strcmp(val, "spinner") == 0) action = ACTION_SPINNER;
+    else action = ACTION_NONE;
+  }
+
+  LedMode m;
+  if (extractJsonVal(json, "warn_light_mode", val, sizeof(val)) && parseLedMode(val, m))
+    warnLight.setMode(m);
+  if (extractJsonVal(json, "headlight_mode", val, sizeof(val)) && parseLedMode(val, m))
+    headlight.setMode(m);
 }
 
 void renderUI() {
@@ -211,7 +294,13 @@ void renderUI() {
 void setup() {
   Serial.begin(115200);
   oled.begin();
-  
+  warnLight.begin(PIN_WARN_LIGHT);
+  headlight.begin(PIN_HEADLIGHT);
+
+  // Startup state: both lights blink at 5 Hz until a JSON command changes them
+  warnLight.setMode(LED_BLINK_5HZ);
+  headlight.setMode(LED_BLINK_5HZ);
+
   // Default centered view
   strcpy(title, "WareGV");
   action = ACTION_SPINNER;
@@ -231,6 +320,10 @@ void loop() {
       rxBuffer[rxIdx++] = c;
     }
   }
+
+  // Non-blocking LED patterns
+  warnLight.update();
+  headlight.update();
 
   // Animate at ~10 FPS
   if (millis() - lastAnim > 100) {
