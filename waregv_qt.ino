@@ -38,9 +38,9 @@ enum LedMode : uint8_t {
   LED_OFF, LED_ON, LED_BLINK_2HZ, LED_BLINK_5HZ, LED_PULSE_3, LED_PULSE_5
 };
 
-#define PULSE_ON_MS     100   // one flash: on time
-#define PULSE_OFF_MS    100   // one flash: off time
-#define PULSE_PAUSE_MS  1000  // pause between bursts
+#define PULSE_ON_MS     100
+#define PULSE_OFF_MS    100
+#define PULSE_PAUSE_MS  1000
 
 struct Led {
   uint8_t pin;
@@ -55,7 +55,7 @@ struct Led {
 
   void setMode(LedMode m) {
     mode = m;
-    modeStart = millis();   // restart pattern phase on every change
+    modeStart = millis();
   }
 
   void update() {
@@ -64,8 +64,8 @@ struct Led {
     switch (mode) {
       case LED_OFF:       on = false; break;
       case LED_ON:        on = true;  break;
-      case LED_BLINK_2HZ: on = (t % 500) < 250; break;   // 500 ms period
-      case LED_BLINK_5HZ: on = (t % 200) < 100; break;   // 200 ms period
+      case LED_BLINK_2HZ: on = (t % 500) < 250; break;
+      case LED_BLINK_5HZ: on = (t % 200) < 100; break;
       case LED_PULSE_3:
       case LED_PULSE_5: {
         uint8_t n = (mode == LED_PULSE_3) ? 3 : 5;
@@ -117,12 +117,33 @@ public:
       buffer[x + (y >> 3) * OLED_WIDTH] |= (1 << (y & 7));
   }
 
+  void clearPixel(int16_t x, int16_t y) {
+    if (x >= 0 && x < OLED_WIDTH && y >= 0 && y < OLED_HEIGHT)
+      buffer[x + (y >> 3) * OLED_WIDTH] &= ~(1 << (y & 7));
+  }
+
   void fillRect(int16_t x, int16_t y, int16_t w, int16_t h) {
     for (int16_t i = 0; i < w; i++)
       for (int16_t j = 0; j < h; j++) pixel(x + i, y + j);
   }
 
-  void drawText(int16_t x, int16_t y, const char *str, uint8_t scale) {
+  void clearRect(int16_t x, int16_t y, int16_t w, int16_t h) {
+    for (int16_t i = 0; i < w; i++)
+      for (int16_t j = 0; j < h; j++) clearPixel(x + i, y + j);
+  }
+
+  // Rounded filled rect: fills, then knocks out the 4 corner pixels.
+  void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h) {
+    fillRect(x, y, w, h);
+    clearPixel(x,           y);
+    clearPixel(x + w - 1,   y);
+    clearPixel(x,           y + h - 1);
+    clearPixel(x + w - 1,   y + h - 1);
+  }
+
+  // Draws text with each lit pixel set to value = on (1 = white, 0 = dark).
+  // Used to render inverted (dark) text on a filled tag.
+  void drawTextInv(int16_t x, int16_t y, const char *str, uint8_t scale, bool on) {
     while (*str) {
       char c = *str;
       if (c >= 'a' && c <= 'z') c -= 32;
@@ -132,8 +153,13 @@ public:
           uint8_t b = pgm_read_byte(&FONT[idx][col]);
           for (uint8_t row = 0; row < 7; row++) {
             if (b & (1 << row)) {
-              if (scale == 1) pixel(x + col, y + row);
-              else fillRect(x + col * scale, y + row * scale, scale, scale);
+              if (on) {
+                if (scale == 1) pixel(x + col, y + row);
+                else fillRect(x + col * scale, y + row * scale, scale, scale);
+              } else {
+                if (scale == 1) clearPixel(x + col, y + row);
+                else clearRect(x + col * scale, y + row * scale, scale, scale);
+              }
             }
           }
         }
@@ -141,6 +167,11 @@ public:
       x += 6 * scale;
       str++;
     }
+  }
+
+  // Normal (white on black) text — kept for title/subtitle.
+  void drawText(int16_t x, int16_t y, const char *str, uint8_t scale) {
+    drawTextInv(x, y, str, scale, true);
   }
 
   void display() {
@@ -161,16 +192,20 @@ public:
 
 // Global UI state
 Display oled;
-char title[24] = "";
+char title[24]    = "";
 char subtitle[24] = "";
+char ipText[16]   = "";   // 12 digits or empty
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
 char rxBuffer[100];
 uint8_t rxIdx = 0;
 
-// Finds "key" (with quotes, so "title" can't match inside "subtitle").
-// Returns true if the key was present.
+// Tag geometry (top-center)
+#define TAG_H      11   // total tag height (7px text + 2px pad top/bottom)
+#define TAG_PAD_X   4   // horizontal padding inside tag
+#define TAG_TOP_Y   2   // distance from top of screen
+
 bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
   char pat[24];
   snprintf(pat, sizeof(pat), "\"%s\"", key);
@@ -189,8 +224,30 @@ bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen
   return true;
 }
 
-// Accepts "OFF","ON","BLINK_2HZ","BLINK_5HZ","PULSE_3","PULSE_5"
-// (case-insensitive) or the numbers 0..5. Returns false if unknown.
+// "10.15.16.198" -> "010015016198"
+bool parseIpToDigits(const char *v, char *out) {
+  uint8_t octet[4];
+  const char *p = v;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (*p < '0' || *p > '9') return false;
+    uint16_t n = 0;
+    uint8_t  digits = 0;
+    while (*p >= '0' && *p <= '9') {
+      n = n * 10 + (*p - '0');
+      if (++digits > 3 || n > 255) return false;
+      p++;
+    }
+    octet[i] = (uint8_t)n;
+    if (i < 3) {
+      if (*p != '.') return false;
+      p++;
+    }
+  }
+  if (*p != '\0') return false;
+  snprintf(out, 13, "%03u%03u%03u%03u", octet[0], octet[1], octet[2], octet[3]);
+  return true;
+}
+
 bool parseLedMode(const char *v, LedMode &m) {
   char u[12];
   uint8_t i = 0;
@@ -207,10 +264,19 @@ bool parseLedMode(const char *v, LedMode &m) {
   return true;
 }
 
-// Every key is optional: only keys present in the message are changed.
 void parseJson(const char *json) {
   extractJsonVal(json, "title", title, sizeof(title));
   extractJsonVal(json, "subtitle", subtitle, sizeof(subtitle));
+
+  char ipVal[20];
+  if (extractJsonVal(json, "ip", ipVal, sizeof(ipVal))) {
+    char packed[13];
+    if (parseIpToDigits(ipVal, packed)) {
+      strcpy(ipText, packed);
+    } else {
+      ipText[0] = '\0';
+    }
+  }
 
   char val[16];
   if (extractJsonVal(json, "action", val, sizeof(val))) {
@@ -229,36 +295,56 @@ void parseJson(const char *json) {
 void renderUI() {
   oled.clear();
 
-  bool hasTitle = title[0] != '\0';
-  bool hasSub = subtitle[0] != '\0';
+  bool hasTitle  = title[0] != '\0';
+  bool hasSub    = subtitle[0] != '\0';
+  bool hasIp     = ipText[0] != '\0';
   bool hasAction = (action != ACTION_NONE);
 
-  // Height definitions: Title (14px), Subtitle (7px), Action (8px)
-  uint8_t hTitle = hasTitle ? 14 : 0;
-  uint8_t hSub = hasSub ? 7 : 0;
-  uint8_t hAct = hasAction ? 8 : 0;
+  // ---- Top-center IP tag ----
+  if (hasIp) {
+    uint8_t textW = strlen(ipText) * 6 - 1;      // scale 1: 5px glyph + 1px gap
+    int16_t tagW  = textW + TAG_PAD_X * 2;
+    int16_t tagX  = (OLED_WIDTH - tagW) / 2;
+    int16_t tagY  = TAG_TOP_Y;
 
-  uint8_t count = (hasTitle ? 1 : 0) + (hasSub ? 1 : 0) + (hasAction ? 1 : 0);
+    // Filled rounded tag
+    oled.fillRoundRect(tagX, tagY, tagW, TAG_H);
+
+    // Text vertically centered inside tag (TAG_H=11, glyph=7 → pad 2)
+    int16_t textY = tagY + (TAG_H - 7) / 2;
+    oled.drawTextInv(tagX + TAG_PAD_X, textY, ipText, 1, false); // false = knock out
+  }
+
+  // ---- Center the remaining block in the space BELOW the tag ----
+  uint8_t topReserve = hasIp ? (TAG_TOP_Y + TAG_H + 4) : 0;    // 4px gap under tag
+  uint8_t availH     = OLED_HEIGHT - topReserve;
+
+  uint8_t hTitle = hasTitle  ? 14 : 0;
+  uint8_t hSub   = hasSub    ?  7 : 0;
+  uint8_t hAct   = hasAction ?  8 : 0;
+
+  uint8_t count   = (hasTitle?1:0) + (hasSub?1:0) + (hasAction?1:0);
   uint8_t spacing = (count > 1) ? 6 : 0;
-  
-  uint8_t totalHeight = hTitle + hSub + hAct + ((count > 1) ? (count - 1) * spacing : 0);
-  int16_t currentY = (OLED_HEIGHT - totalHeight) / 2;
+  uint8_t totalH  = hTitle + hSub + hAct
+                  + ((count > 1) ? (count - 1) * spacing : 0);
 
-  // Render Title (Scale 2)
+  int16_t currentY = topReserve + (availH - totalH) / 2;
+
+  // Title (scale 2)
   if (hasTitle) {
     int16_t x = (OLED_WIDTH - (strlen(title) * 12 - 2)) / 2;
     oled.drawText(x < 0 ? 0 : x, currentY, title, 2);
     currentY += hTitle + spacing;
   }
 
-  // Render Subtitle (Scale 1)
+  // Subtitle (scale 1)
   if (hasSub) {
     int16_t x = (OLED_WIDTH - (strlen(subtitle) * 6 - 1)) / 2;
     oled.drawText(x < 0 ? 0 : x, currentY, subtitle, 1);
     currentY += hSub + spacing;
   }
 
-  // Render Action Graphic
+  // Action graphic
   if (hasAction) {
     if (action == ACTION_LOADER) {
       int16_t barW = 60, barH = 6;
@@ -273,7 +359,7 @@ void renderUI() {
       }
       uint8_t fillW = (animStep % 10) * (barW - 4) / 9;
       oled.fillRect(barX + 2, currentY + 2, fillW, barH - 4);
-    } 
+    }
     else if (action == ACTION_SPINNER) {
       int16_t cx = OLED_WIDTH / 2;
       int16_t cy = currentY + 4;
@@ -297,17 +383,14 @@ void setup() {
   warnLight.begin(PIN_WARN_LIGHT);
   headlight.begin(PIN_HEADLIGHT);
 
-  // Startup state: both lights blink at 5 Hz until a JSON command changes them
   warnLight.setMode(LED_BLINK_5HZ);
   headlight.setMode(LED_BLINK_5HZ);
 
-  // Default centered view
   strcpy(title, "WareGV");
   action = ACTION_SPINNER;
 }
 
 void loop() {
-  // Read Serial JSON Input
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
@@ -321,11 +404,9 @@ void loop() {
     }
   }
 
-  // Non-blocking LED patterns
   warnLight.update();
   headlight.update();
 
-  // Animate at ~10 FPS
   if (millis() - lastAnim > 100) {
     lastAnim = millis();
     animStep++;
