@@ -373,8 +373,8 @@ void setup() {
   warnLight.begin(PIN_WARN_LIGHT);
   headlight.begin(PIN_HEADLIGHT);
 
-  warnLight.setMode(LED_BLINK_5HZ);
-  headlight.setMode(LED_BLINK_5HZ);
+  warnLight.setMode(LED_BLINK_2HZ);
+  headlight.setMode(LED_BLINK_2HZ);
 
   strcpy(title, "WareGV");
   action = ACTION_SPINNER;
