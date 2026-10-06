@@ -132,7 +132,6 @@ public:
       for (int16_t j = 0; j < h; j++) clearPixel(x + i, y + j);
   }
 
-  // Rounded filled rect: fills, then knocks out the 4 corner pixels.
   void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h) {
     fillRect(x, y, w, h);
     clearPixel(x,           y);
@@ -141,8 +140,6 @@ public:
     clearPixel(x + w - 1,   y + h - 1);
   }
 
-  // Draws text with each lit pixel set to value = on (1 = white, 0 = dark).
-  // Used to render inverted (dark) text on a filled tag.
   void drawTextInv(int16_t x, int16_t y, const char *str, uint8_t scale, bool on) {
     while (*str) {
       char c = *str;
@@ -169,7 +166,6 @@ public:
     }
   }
 
-  // Normal (white on black) text — kept for title/subtitle.
   void drawText(int16_t x, int16_t y, const char *str, uint8_t scale) {
     drawTextInv(x, y, str, scale, true);
   }
@@ -194,17 +190,19 @@ public:
 Display oled;
 char title[24]    = "";
 char subtitle[24] = "";
-char ipText[16]   = "";   // 12 digits or empty
+char ipText[16]   = "";
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
-char rxBuffer[100];
+
+// *** FIXED: was 100, too small for the ROS node's ~130-byte packets ***
+char rxBuffer[256];
 uint8_t rxIdx = 0;
 
 // Tag geometry (top-center)
-#define TAG_H      11   // total tag height (7px text + 2px pad top/bottom)
-#define TAG_PAD_X   4   // horizontal padding inside tag
-#define TAG_TOP_Y   2   // distance from top of screen
+#define TAG_H      11
+#define TAG_PAD_X   4
+#define TAG_TOP_Y   2
 
 bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
   char pat[24];
@@ -224,7 +222,6 @@ bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen
   return true;
 }
 
-// "10.15.16.198" -> "010015016198"
 bool parseIpToDigits(const char *v, char *out) {
   uint8_t octet[4];
   const char *p = v;
@@ -300,23 +297,19 @@ void renderUI() {
   bool hasIp     = ipText[0] != '\0';
   bool hasAction = (action != ACTION_NONE);
 
-  // ---- Top-center IP tag ----
   if (hasIp) {
-    uint8_t textW = strlen(ipText) * 6 - 1;      // scale 1: 5px glyph + 1px gap
+    uint8_t textW = strlen(ipText) * 6 - 1;
     int16_t tagW  = textW + TAG_PAD_X * 2;
     int16_t tagX  = (OLED_WIDTH - tagW) / 2;
     int16_t tagY  = TAG_TOP_Y;
 
-    // Filled rounded tag
     oled.fillRoundRect(tagX, tagY, tagW, TAG_H);
 
-    // Text vertically centered inside tag (TAG_H=11, glyph=7 → pad 2)
     int16_t textY = tagY + (TAG_H - 7) / 2;
-    oled.drawTextInv(tagX + TAG_PAD_X, textY, ipText, 1, false); // false = knock out
+    oled.drawTextInv(tagX + TAG_PAD_X, textY, ipText, 1, false);
   }
 
-  // ---- Center the remaining block in the space BELOW the tag ----
-  uint8_t topReserve = hasIp ? (TAG_TOP_Y + TAG_H + 4) : 0;    // 4px gap under tag
+  uint8_t topReserve = hasIp ? (TAG_TOP_Y + TAG_H + 4) : 0;
   uint8_t availH     = OLED_HEIGHT - topReserve;
 
   uint8_t hTitle = hasTitle  ? 14 : 0;
@@ -330,21 +323,18 @@ void renderUI() {
 
   int16_t currentY = topReserve + (availH - totalH) / 2;
 
-  // Title (scale 2)
   if (hasTitle) {
     int16_t x = (OLED_WIDTH - (strlen(title) * 12 - 2)) / 2;
     oled.drawText(x < 0 ? 0 : x, currentY, title, 2);
     currentY += hTitle + spacing;
   }
 
-  // Subtitle (scale 1)
   if (hasSub) {
     int16_t x = (OLED_WIDTH - (strlen(subtitle) * 6 - 1)) / 2;
     oled.drawText(x < 0 ? 0 : x, currentY, subtitle, 1);
     currentY += hSub + spacing;
   }
 
-  // Action graphic
   if (hasAction) {
     if (action == ACTION_LOADER) {
       int16_t barW = 60, barH = 6;
@@ -396,7 +386,16 @@ void loop() {
     if (c == '\n' || c == '\r') {
       if (rxIdx > 0) {
         rxBuffer[rxIdx] = '\0';
+        // *** Debug echo so the host can see what was parsed ***
+        Serial.print("RX[");
+        Serial.print(rxIdx);
+        Serial.print("]: ");
+        Serial.println(rxBuffer);
         parseJson(rxBuffer);
+        Serial.print("  warn=");
+        Serial.print(warnLight.mode);
+        Serial.print(" head=");
+        Serial.println(headlight.mode);
         rxIdx = 0;
       }
     } else if (rxIdx < sizeof(rxBuffer) - 1) {
