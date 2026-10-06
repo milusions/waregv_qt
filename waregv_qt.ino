@@ -8,7 +8,7 @@
 #define OLED_PAGES      8
 #define OLED_OFFSET     2
 
-// 5x7 Font (unchanged, lives in PROGMEM/flash, not RAM)
+// 5x7 Font (unchanged)
 const uint8_t PROGMEM FONT[][5] = {
   {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5F,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},{0x14,0x7F,0x14,0x7F,0x14},
   {0x24,0x2A,0x7F,0x2A,0x12},{0x23,0x13,0x08,0x64,0x62},{0x36,0x49,0x55,0x22,0x50},{0x00,0x05,0x03,0x00,0x00},
@@ -83,7 +83,7 @@ Led warnLight, headlight;
 
 class Display {
 private:
-  uint8_t buffer[1024];  // framebuffer -- irreducible
+  uint8_t buffer[1024];
 
   void cmd(uint8_t c) {
     Wire.beginTransmission(OLED_ADDR);
@@ -187,15 +187,14 @@ public:
 
 Display oled;
 
-// ---- Reduced-size state buffers ----
 char title[16]    = "";
 char subtitle[20] = "";
-char ipText[13]   = "";      // 12 digits + NUL
+char ipText[13]   = "";
 ActionType action = ACTION_NONE;
 uint8_t animStep = 0;
 unsigned long lastAnim = 0;
+bool uiDirty = true; // Prevents I2C lockups by only rendering when needed
 
-// 160 bytes is enough for the node's ~132-byte packet plus slack
 char rxBuffer[160];
 uint8_t rxIdx = 0;
 
@@ -205,7 +204,6 @@ uint8_t rxIdx = 0;
 
 bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen) {
   char pat[20];
-  // Build "key" with quotes; snprintf_P is not used here for portability
   pat[0] = '"';
   uint8_t i = 1;
   while (key[i-1] && i < sizeof(pat) - 2) {
@@ -215,13 +213,15 @@ bool extractJsonVal(const char *json, const char *key, char *out, uint8_t maxLen
   pat[i++] = '"';
   pat[i]   = '\0';
 
-  out[0] = '\0';
   const char *p = strstr(json, pat);
   if (!p) return false;
   p = strchr(p + i, ':');
   if (!p) return false;
   p++;
   while (*p == ' ' || *p == '"') p++;
+  
+  // FIX: Only zero out the buffer if the key was ACTUALLY found
+  out[0] = '\0';
   uint8_t j = 0;
   while (*p && *p != '"' && *p != ',' && *p != '}' && j < maxLen - 1) {
     out[j++] = *p++;
@@ -254,9 +254,6 @@ bool parseIpToDigits(const char *v, char *out) {
 }
 
 bool parseLedMode(const char *v, LedMode &m) {
-  // Compare against known strings without building an uppercase copy
-  // (each comparison is done manually; short and stack-friendly)
-  // Accepts case-sensitive canonical names + single-char aliases.
   if      (!strcmp(v, "OFF")       || !strcmp(v, "0")) m = LED_OFF;
   else if (!strcmp(v, "ON")        || !strcmp(v, "1")) m = LED_ON;
   else if (!strcmp(v, "BLINK_2HZ") || !strcmp(v, "2")) m = LED_BLINK_2HZ;
@@ -387,14 +384,15 @@ void setup() {
 }
 
 void loop() {
-  // Feed the parser one byte at a time; no dynamic allocation
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
       if (rxIdx > 0) {
         rxBuffer[rxIdx] = '\0';
         parseJson(rxBuffer);
-        // Debug echo (F() keeps the string in flash, not RAM)
+        
+        uiDirty = true; // State changed, mark UI for rendering
+        
         Serial.print(F("RX["));
         Serial.print(rxIdx);
         Serial.print(F("] warn="));
@@ -405,8 +403,6 @@ void loop() {
       }
     } else if (rxIdx < sizeof(rxBuffer) - 1) {
       rxBuffer[rxIdx++] = c;
-    } else {
-      // Overflow: drop byte (should never happen with 160-byte buffer)
     }
   }
 
@@ -416,6 +412,15 @@ void loop() {
   if (millis() - lastAnim > 100) {
     lastAnim = millis();
     animStep++;
+    // Only constantly mark the UI dirty if an animation is actually running
+    if (action != ACTION_NONE) {
+      uiDirty = true;
+    }
+  }
+
+  // Render outside the timer if data changed, to prevent I2C lockups
+  if (uiDirty) {
     renderUI();
+    uiDirty = false;
   }
 }
